@@ -1,0 +1,24 @@
+/* src/styles/DocumentsPage.css */
+
+.upload-zone {
+  border: 2px dashed var(--border-medium);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  text-align: center;
+  background: var(--bg-app);
+  transition: var(--transition-standard);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-zone:hover, 
+.upload-zone.drag-active {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+}
+
+.hidden-input {
+  display: none;
+}

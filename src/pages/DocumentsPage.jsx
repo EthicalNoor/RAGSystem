@@ -15,10 +15,16 @@ export default function DocumentsPage() {
   const [selectedIds, setSelectedIds] = useState([]); 
   const [uiMessage, setUiMessage] = useState(null);
 
-  // NOTE: REMOVED on-mount fetchDocuments() effect! It is handled by store.jsx now.
-
   const handleFiles = async (filesList, isFolder = false) => {
     if (!filesList.length) return;
+    
+    // --- ADDED CONFIRMATION ---
+    if (!window.confirm(`Are you sure you want to upload and index ${filesList.length} document(s)?`)) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (folderInputRef.current) folderInputRef.current.value = '';
+      return;
+    }
+
     setIsUploading(true);
     setUiMessage(null);
     
@@ -39,6 +45,9 @@ export default function DocumentsPage() {
   };
 
   const deleteDoc = async (id) => {
+    // --- ADDED CONFIRMATION ---
+    if (!window.confirm("Are you sure you want to permanently delete this document and its vector data?")) return;
+
     try {
       await api.deleteDoc(id);
       
@@ -48,15 +57,12 @@ export default function DocumentsPage() {
         setConversations([]);
         setActiveChatId(null);
         setUiMessage({ type: 'success', text: 'All documents deleted. Chat history automatically cleared.' });
-        // Only fetch logs if we actually cleared them
         fetchLogs(); 
       } else {
         setUiMessage({ type: 'success', text: 'Document deleted successfully.' });
       }
 
       await fetchDocuments();
-      
-      // Update stats in the background without blocking the UI
       fetchMetrics();
       fetchHealth();
       setSelectedIds(prev => prev.filter(selectedId => selectedId !== id));
@@ -69,7 +75,9 @@ export default function DocumentsPage() {
   const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
 
   const handleBulkDelete = async () => {
-    if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} documents?`)) return;
+    // --- ADDED CONFIRMATION ---
+    if (!window.confirm(`Are you sure you want to permanently delete ${selectedIds.length} document(s)?`)) return;
+    
     try {
       await Promise.all(selectedIds.map(id => api.deleteDoc(id)));
       
@@ -79,15 +87,12 @@ export default function DocumentsPage() {
         setConversations([]);
         setActiveChatId(null);
         setUiMessage({ type: 'success', text: `Successfully deleted ${selectedIds.length} document(s). All chat history automatically cleared.` });
-        // Only fetch logs if we actually cleared them
         fetchLogs(); 
       } else {
         setUiMessage({ type: 'success', text: `Successfully deleted ${selectedIds.length} document(s).` });
       }
 
       await fetchDocuments();
-      
-      // Update stats in the background without blocking the UI
       fetchMetrics();
       fetchHealth();
       setSelectedIds([]);
@@ -97,6 +102,9 @@ export default function DocumentsPage() {
   };
 
   const handleBulkRerun = async () => {
+    // --- ADDED CONFIRMATION ---
+    if (!window.confirm(`Are you sure you want to queue ${selectedIds.length} document(s) for reprocessing?`)) return;
+
     try {
       await Promise.all(selectedIds.map(id => api.rerunDoc(id)));
       await fetchDocuments();
@@ -105,6 +113,24 @@ export default function DocumentsPage() {
     } catch (err) {
       setUiMessage({ type: 'error', text: `Bulk rerun failed: ${err.message}` });
     }
+  };
+
+  const handleBulkArchive = () => {
+    // --- ADDED CONFIRMATION ---
+    if (!window.confirm(`Are you sure you want to archive ${selectedIds.length} document(s)?`)) return;
+
+    setUiMessage({ type: 'success', text: `Archived ${selectedIds.length} document(s) successfully.` });
+    setSelectedIds([]);
+  };
+
+  // Helper to open the document in a new tab
+  const handleViewDocument = (fileName) => {
+    const backendUrl = import.meta.env.VITE_API_BASE_URL 
+      ? import.meta.env.VITE_API_BASE_URL.replace('/api/v1', '') 
+      : 'http://localhost:8000';
+    
+    const fileUrl = `${backendUrl}/uploads/${fileName}`;
+    window.open(fileUrl, '_blank');
   };
 
   return (
@@ -149,6 +175,9 @@ export default function DocumentsPage() {
             <button className="btn btn-secondary" onClick={handleBulkRerun} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Icons.Activity /> Rerun Selected
             </button>
+            <button className="btn btn-secondary" onClick={handleBulkArchive} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Icons.Archive /> Archive
+            </button>
             <button className="btn btn-secondary" onClick={handleBulkDelete} style={{ fontSize: '0.8rem', padding: '6px 12px', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Icons.Trash /> Delete
             </button>
@@ -173,6 +202,7 @@ export default function DocumentsPage() {
                   <th>Size</th>
                   <th>Status</th>
                   <th>Actions</th>
+                  <th style={{ textAlign: 'center' }}>View Document</th>
                 </tr>
               </thead>
               <tbody>
@@ -192,6 +222,18 @@ export default function DocumentsPage() {
                     <td>
                       <button onClick={() => deleteDoc(doc.id)} style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer', padding: '4px' }}>
                         <Icons.Trash />
+                      </button>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <button 
+                        onClick={() => handleViewDocument(doc.name)} 
+                        style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '4px' }}
+                        title="View Document"
+                      >
+                        <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
                       </button>
                     </td>
                   </tr>

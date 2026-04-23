@@ -10,7 +10,6 @@ export default function SettingsPage() {
   const [uiMessage, setUiMessage] = useState(null); 
   const [isSaving, setIsSaving] = useState(false);
 
-  // Dynamic Models State
   const [availableModels, setAvailableModels] = useState({
     openai: { 
       llm: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'], 
@@ -24,7 +23,6 @@ export default function SettingsPage() {
 
   const MASK = "••••••••••••••••••••••••••••••••";
 
-  // Fetch settings & dynamically fetch models from backend
   useEffect(() => {
     if (globalSettings) {
       setSettings({
@@ -36,7 +34,6 @@ export default function SettingsPage() {
       });
       setKeysModified({ openai: false, gemini: false });
       
-      // Fetch dynamic models based on saved API keys
       api.getModels().then(data => {
         setAvailableModels(prev => ({
           openai: {
@@ -63,7 +60,6 @@ export default function SettingsPage() {
     setSettings(prev => {
       const next = { ...prev, [name]: name === 'chunk_size' ? parseInt(value) : (name === 'temperature' ? parseFloat(value) : value) };
       
-      // Auto-switch models if provider changes
       if (name === 'api_provider') {
         const nextProviderModels = availableModels[value];
         if (value === 'gemini') {
@@ -87,6 +83,10 @@ export default function SettingsPage() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+
+    // --- ADDED CONFIRMATION ---
+    if (!window.confirm("Are you sure you want to save and apply these system configuration changes?")) return;
+
     setUiMessage(null);
     setIsSaving(true);
 
@@ -107,7 +107,6 @@ export default function SettingsPage() {
 
   const activeProvider = settings.api_provider || 'gemini';
   
-  // Guarantee currently saved settings always show in dropdown (in case of custom fine-tuned models)
   let llmOptions = [...(availableModels[activeProvider]?.llm || [])];
   if (settings.llm_model && !llmOptions.includes(settings.llm_model)) llmOptions.unshift(settings.llm_model);
 

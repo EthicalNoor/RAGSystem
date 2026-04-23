@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles  # <-- IMPORT ADDED
 from sqlalchemy import text
 
 from app.config import get_logger, get_config
@@ -10,6 +11,9 @@ from app.database import engine, Base
 
 logger = get_logger(__name__)
 config = get_config()
+
+# --- FIX: Ensure upload directory exists BEFORE mounting ---
+os.makedirs(config.upload_dir, exist_ok=True)
 
 # Initialize pgvector extension and create tables
 try:
@@ -26,6 +30,9 @@ app = FastAPI(
     description="Production-grade FastAPI backend with pgvector",
     version="1.0.0"
 )
+
+# --- FIX: Mount the uploads directory to serve static PDF files ---
+app.mount("/uploads", StaticFiles(directory=config.upload_dir), name="uploads")
 
 # Apply dynamic CORS settings from .env
 app.add_middleware(
@@ -59,7 +66,6 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    os.makedirs(config.upload_dir, exist_ok=True)
     
     # Automatically disable 'reload' if ENVIRONMENT is set to production
     is_development = config.environment.lower() == "development"

@@ -6,11 +6,14 @@ import '../styles/DashboardPage.css';
 export default function DashboardPage() {
   const { metrics, fetchMetrics } = useApp();
 
+  // ONLY fetch metrics if we don't have them yet
   useEffect(() => {
-    fetchMetrics();
-  }, [fetchMetrics]);
+    if (!metrics) {
+      fetchMetrics();
+    }
+  }, [metrics, fetchMetrics]);
 
-  if (!metrics) return <div>Loading metrics...</div>;
+  if (!metrics) return <div style={{ padding: '20px' }}>Loading metrics...</div>;
 
   return (
     <div className="page-container">

@@ -1,10 +1,13 @@
 // src/pages/DocumentsPage.jsx
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { api, Icons, useApp } from '../store';
 import '../styles/DocumentsPage.css';
 
 export default function DocumentsPage() {
-  const { documents, fetchDocuments, fetchMetrics, fetchHealth } = useApp();
+  const { 
+    documents, fetchDocuments, fetchMetrics, fetchHealth, fetchLogs,
+    setConversations, setActiveChatId 
+  } = useApp();
   
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -12,7 +15,7 @@ export default function DocumentsPage() {
   const [selectedIds, setSelectedIds] = useState([]); 
   const [uiMessage, setUiMessage] = useState(null);
 
-  useEffect(() => { fetchDocuments(); }, [fetchDocuments]);
+  // NOTE: REMOVED on-mount fetchDocuments() effect! It is handled by store.jsx now.
 
   const handleFiles = async (filesList, isFolder = false) => {
     if (!filesList.length) return;
@@ -38,11 +41,25 @@ export default function DocumentsPage() {
   const deleteDoc = async (id) => {
     try {
       await api.deleteDoc(id);
+      
+      const remainingDocs = await api.getDocs();
+      if (remainingDocs.length === 0) {
+        await api.clearLogs();
+        setConversations([]);
+        setActiveChatId(null);
+        setUiMessage({ type: 'success', text: 'All documents deleted. Chat history automatically cleared.' });
+        // Only fetch logs if we actually cleared them
+        fetchLogs(); 
+      } else {
+        setUiMessage({ type: 'success', text: 'Document deleted successfully.' });
+      }
+
       await fetchDocuments();
+      
+      // Update stats in the background without blocking the UI
       fetchMetrics();
       fetchHealth();
       setSelectedIds(prev => prev.filter(selectedId => selectedId !== id));
-      setUiMessage({ type: 'success', text: 'Document deleted successfully.' });
     } catch (err) {
       setUiMessage({ type: 'error', text: `Delete failed: ${err.message}` });
     }
@@ -55,10 +72,24 @@ export default function DocumentsPage() {
     if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} documents?`)) return;
     try {
       await Promise.all(selectedIds.map(id => api.deleteDoc(id)));
+      
+      const remainingDocs = await api.getDocs();
+      if (remainingDocs.length === 0) {
+        await api.clearLogs();
+        setConversations([]);
+        setActiveChatId(null);
+        setUiMessage({ type: 'success', text: `Successfully deleted ${selectedIds.length} document(s). All chat history automatically cleared.` });
+        // Only fetch logs if we actually cleared them
+        fetchLogs(); 
+      } else {
+        setUiMessage({ type: 'success', text: `Successfully deleted ${selectedIds.length} document(s).` });
+      }
+
       await fetchDocuments();
+      
+      // Update stats in the background without blocking the UI
       fetchMetrics();
       fetchHealth();
-      setUiMessage({ type: 'success', text: `Successfully deleted ${selectedIds.length} document(s).` });
       setSelectedIds([]);
     } catch (err) {
       setUiMessage({ type: 'error', text: `Bulk delete failed: ${err.message}` });
@@ -74,11 +105,6 @@ export default function DocumentsPage() {
     } catch (err) {
       setUiMessage({ type: 'error', text: `Bulk rerun failed: ${err.message}` });
     }
-  };
-
-  const handleBulkArchive = () => {
-    setUiMessage({ type: 'success', text: `Archived ${selectedIds.length} document(s) successfully.` });
-    setSelectedIds([]);
   };
 
   return (
@@ -122,9 +148,6 @@ export default function DocumentsPage() {
             </span>
             <button className="btn btn-secondary" onClick={handleBulkRerun} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Icons.Activity /> Rerun Selected
-            </button>
-            <button className="btn btn-secondary" onClick={handleBulkArchive} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Icons.Archive /> Archive
             </button>
             <button className="btn btn-secondary" onClick={handleBulkDelete} style={{ fontSize: '0.8rem', padding: '6px 12px', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Icons.Trash /> Delete

@@ -1,8 +1,8 @@
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.models import DocumentChunkModel
-from app.config import get_logger, get_config
+from app.models import DocumentChunkModel, SystemSettingsModel
+from app.config import get_logger
 
 from google import genai
 from openai import OpenAI
@@ -12,40 +12,40 @@ logger = get_logger(__name__)
 class VectorRepository:
     def __init__(self, db: Session):
         self.db = db
-        self.config = get_config()
-        
-        # Initialize clients conditionally based on available keys using new SDKs
-        self.gemini_client = genai.Client(api_key=self.config.gemini_api_key) if self.config.gemini_api_key else None
-        self.openai_client = OpenAI(api_key=self.config.openai_api_key) if self.config.openai_api_key else None
+
+    def _get_settings(self) -> SystemSettingsModel:
+        settings = self.db.query(SystemSettingsModel).filter_by(id="default").first()
+        if not settings:
+            raise ValueError("System settings not found in database. Please check settings.")
+        return settings
 
     def _generate_embedding(self, text_input: str) -> List[float]:
-        provider = self.config.api_provider
+        settings = self._get_settings()
+        provider = settings.api_provider
         
         try:
             if provider == "gemini":
-                if not self.gemini_client:
-                    raise ValueError("Gemini API key is missing or invalid.")
+                if not settings.gemini_api_key:
+                    raise ValueError("Gemini API key is missing in Database settings.")
                 
-                model = self.config.embedding_model or ""
+                gemini_client = genai.Client(api_key=settings.gemini_api_key)
+                model = settings.embedding_model or ""
                 model = model.replace("models/", "")
                 
-                # Prevent sending OpenAI model names to Gemini
                 if "text-embedding-3" in model:
                     model = "text-embedding-004"
                 
                 try:
-                    result = self.gemini_client.models.embed_content(
+                    result = gemini_client.models.embed_content(
                         model=model,
                         contents=text_input
                     )
                 except Exception as e:
-                    # FIX: Dynamic Discovery Fallback
-                    # If the requested model throws a 404, dynamically find a supported one.
                     logger.warning(f"Embedding model '{model}' failed. Dynamically finding a supported Gemini embedding model...")
                     
                     fallback_model = None
                     try:
-                        for m_info in self.gemini_client.models.list():
+                        for m_info in gemini_client.models.list():
                             methods = getattr(m_info, 'supported_actions', getattr(m_info, 'supported_generation_methods', []))
                             if methods and "embedContent" in methods:
                                 fallback_model = m_info.name.replace("models/", "")
@@ -54,8 +54,12 @@ class VectorRepository:
                         logger.error(f"Failed to dynamically list models: {list_err}")
 
                     if fallback_model:
-                        logger.info(f"Dynamically selected authorized embedding model: {fallback_model}")
-                        result = self.gemini_client.models.embed_content(
+                        logger.info(f"Dynamically selected embedding model: {fallback_model}. Saving to database.")
+                        
+                        settings.embedding_model = fallback_model
+                        self.db.commit()
+                        
+                        result = gemini_client.models.embed_content(
                             model=fallback_model,
                             contents=text_input
                         )
@@ -65,14 +69,15 @@ class VectorRepository:
                 vec = result.embeddings[0].values
                 
             elif provider == "openai":
-                if not self.openai_client:
-                    raise ValueError("OpenAI API key is missing or invalid.")
+                if not settings.openai_api_key:
+                    raise ValueError("OpenAI API key is missing in Database settings.")
                 
-                model = self.config.embedding_model
+                openai_client = OpenAI(api_key=settings.openai_api_key)
+                model = settings.embedding_model
                 if not model or "text-embedding-004" in model or "gemini" in model:
                     model = "text-embedding-3-small"
 
-                response = self.openai_client.embeddings.create(input=[text_input], model=model)
+                response = openai_client.embeddings.create(input=[text_input], model=model)
                 vec = response.data[0].embedding
             else:
                 raise ValueError(f"Unsupported API provider: {provider}")
@@ -81,7 +86,6 @@ class VectorRepository:
             logger.error(f"Embedding generation failed for provider {provider}: {e}")
             raise e
 
-        # Database safety: Normalize dimension length to 1536 so pgvector doesn't crash
         dim = len(vec)
         if dim < 1536:
             vec.extend([0.0] * (1536 - dim))
@@ -91,7 +95,7 @@ class VectorRepository:
         return vec
 
     def upsert_chunks(self, document_id: str, chunks: List[Dict[str, Any]]):
-        logger.info(f"Inserting {len(chunks)} chunks into pgvector via {self.config.api_provider} for doc {document_id}")
+        logger.info(f"Inserting {len(chunks)} chunks into pgvector for doc {document_id}")
         
         db_chunks = []
         for chunk in chunks:
@@ -107,7 +111,7 @@ class VectorRepository:
         self.db.add_all(db_chunks)
         self.db.commit()
 
-    def search(self, query: str, top_k: int = 3) -> List[dict]:
+    def search(self, query: str, top_k: int = 10) -> List[dict]:
         logger.info(f"Executing pgvector search for query: {query}")
         
         query_vector = self._generate_embedding(query)

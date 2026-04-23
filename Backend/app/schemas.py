@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 class DocumentResponse(BaseModel):
@@ -49,3 +49,6 @@ class SettingsPayload(BaseModel):
     llm_model: str
     chunk_size: int
     temperature: float
+    rag_type: str  # New field: 'standard' or 'graph'
+    openai_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None

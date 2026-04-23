@@ -8,6 +8,19 @@ import uuid
 def generate_uuid():
     return str(uuid.uuid4())
 
+class SystemSettingsModel(Base):
+    __tablename__ = "system_settings"
+
+    id = Column(String, primary_key=True, default="default")
+    api_provider = Column(String, default="")
+    embedding_model = Column(String, default="")
+    llm_model = Column(String, default="")
+    chunk_size = Column(Integer, default=1024)
+    temperature = Column(Float, default=0.2)
+    rag_type = Column(String, default="standard")
+    openai_api_key = Column(String, nullable=True)
+    gemini_api_key = Column(String, nullable=True)
+
 class DocumentModel(Base):
     __tablename__ = "documents"
 
@@ -18,8 +31,9 @@ class DocumentModel(Base):
     status = Column(String, default="Pending") # Pending, Indexed, Failed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Cascade delete chunks if document is removed
+    # Cascade delete chunks AND graph edges if document is removed
     chunks = relationship("DocumentChunkModel", back_populates="document", cascade="all, delete-orphan")
+    graph_edges = relationship("GraphEdgeModel", back_populates="document", cascade="all, delete-orphan")
 
 class DocumentChunkModel(Base):
     __tablename__ = "document_chunks"
@@ -27,12 +41,22 @@ class DocumentChunkModel(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     text_content = Column(Text, nullable=False)
-    # Using 1536 dimensions as standard for OpenAI embeddings. 
-    # Adjust if using a different embedding model size.
     embedding = Column(Vector(1536), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     document = relationship("DocumentModel", back_populates="chunks")
+
+class GraphEdgeModel(Base):
+    __tablename__ = "graph_edges"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    source_node = Column(String, nullable=False)
+    target_node = Column(String, nullable=False)
+    relation = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    document = relationship("DocumentModel", back_populates="graph_edges")
 
 class QueryLogModel(Base):
     __tablename__ = "query_logs"

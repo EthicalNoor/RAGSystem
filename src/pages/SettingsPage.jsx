@@ -10,20 +10,49 @@ export default function SettingsPage() {
   const [uiMessage, setUiMessage] = useState(null); 
   const [isSaving, setIsSaving] = useState(false);
 
+  // Dynamic Models State
+  const [availableModels, setAvailableModels] = useState({
+    openai: { 
+      llm: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'], 
+      embedding: ['text-embedding-3-large', 'text-embedding-3-small', 'text-embedding-ada-002'] 
+    },
+    gemini: { 
+      llm: ['gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'], 
+      embedding: ['text-embedding-004', 'embedding-001'] 
+    }
+  });
+
   const MASK = "••••••••••••••••••••••••••••••••";
 
+  // Fetch settings & dynamically fetch models from backend
   useEffect(() => {
     if (globalSettings) {
       setSettings({
         ...globalSettings,
+        api_provider: globalSettings.api_provider || 'gemini',
+        rag_type: globalSettings.rag_type || 'standard',
         openai_api_key: globalSettings.openai_api_key ? MASK : '',
         gemini_api_key: globalSettings.gemini_api_key ? MASK : ''
       });
       setKeysModified({ openai: false, gemini: false });
+      
+      // Fetch dynamic models based on saved API keys
+      api.getModels().then(data => {
+        setAvailableModels(prev => ({
+          openai: {
+            llm: data.openai.llm.length > 0 ? data.openai.llm : prev.openai.llm,
+            embedding: data.openai.embedding.length > 0 ? data.openai.embedding : prev.openai.embedding
+          },
+          gemini: {
+            llm: data.gemini.llm.length > 0 ? data.gemini.llm : prev.gemini.llm,
+            embedding: data.gemini.embedding.length > 0 ? data.gemini.embedding : prev.gemini.embedding
+          }
+        }));
+      }).catch(err => console.warn("Could not load dynamic models", err));
     }
   }, [globalSettings]);
 
-  if (!settings) return <div>Loading Settings...</div>;
+  if (!settings) return <div style={{ padding: '20px' }}>Loading Settings...</div>;
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -34,13 +63,15 @@ export default function SettingsPage() {
     setSettings(prev => {
       const next = { ...prev, [name]: name === 'chunk_size' ? parseInt(value) : (name === 'temperature' ? parseFloat(value) : value) };
       
+      // Auto-switch models if provider changes
       if (name === 'api_provider') {
+        const nextProviderModels = availableModels[value];
         if (value === 'gemini') {
-          next.llm_model = 'gemini-1.5-pro';
-          next.embedding_model = 'models/text-embedding-004';
+          next.llm_model = nextProviderModels.llm.includes('gemini-1.5-pro') ? 'gemini-1.5-pro' : nextProviderModels.llm[0] || 'gemini-1.5-pro';
+          next.embedding_model = nextProviderModels.embedding.includes('text-embedding-004') ? 'text-embedding-004' : nextProviderModels.embedding[0] || 'text-embedding-004';
         } else {
-          next.llm_model = 'gpt-4o';
-          next.embedding_model = 'text-embedding-3-large';
+          next.llm_model = nextProviderModels.llm.includes('gpt-4o') ? 'gpt-4o' : nextProviderModels.llm[0] || 'gpt-4o';
+          next.embedding_model = nextProviderModels.embedding.includes('text-embedding-3-large') ? 'text-embedding-3-large' : nextProviderModels.embedding[0] || 'text-embedding-3-large';
         }
       }
       return next;
@@ -66,7 +97,7 @@ export default function SettingsPage() {
     try {
       await api.updateSettings(payload);
       await fetchSettings(); 
-      setUiMessage({ type: 'success', text: 'System configuration and API keys securely saved.' });
+      setUiMessage({ type: 'success', text: 'System configuration and API keys securely saved to database.' });
     } catch (err) {
       setUiMessage({ type: 'error', text: `Update Failed: ${err.message}` });
     } finally {
@@ -74,10 +105,14 @@ export default function SettingsPage() {
     }
   };
 
-  const llmOptions = settings.api_provider === 'openai' 
-    ? ['gpt-4o', 'gpt-3.5-turbo'] : ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash'];
-  const embeddingOptions = settings.api_provider === 'openai'
-    ? ['text-embedding-3-large', 'text-embedding-3-small'] : ['models/text-embedding-004', 'models/embedding-001'];
+  const activeProvider = settings.api_provider || 'gemini';
+  
+  // Guarantee currently saved settings always show in dropdown (in case of custom fine-tuned models)
+  let llmOptions = [...(availableModels[activeProvider]?.llm || [])];
+  if (settings.llm_model && !llmOptions.includes(settings.llm_model)) llmOptions.unshift(settings.llm_model);
+
+  let embeddingOptions = [...(availableModels[activeProvider]?.embedding || [])];
+  if (settings.embedding_model && !embeddingOptions.includes(settings.embedding_model)) embeddingOptions.unshift(settings.embedding_model);
 
   return (
     <div className="page-container">
@@ -106,6 +141,19 @@ export default function SettingsPage() {
           <hr style={{ border: 'none', borderTop: '1px solid var(--border-light)', margin: '24px 0' }} />
 
           <div className="control-group">
+            <label className="control-label">RAG Architecture</label>
+            <select name="rag_type" className="control-input" value={settings.rag_type} onChange={handleChange}>
+              <option value="standard">Standard RAG (Vector Similarity)</option>
+              <option value="graph">Graph RAG (Knowledge Graphs & Relationships)</option>
+            </select>
+            <p style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.4'}}>
+              {settings.rag_type === 'graph' 
+                ? "Graph RAG captures complex relationships between data points by connecting entities into a network."
+                : "Standard RAG uses plain documents, finding answers based on mathematical text similarity."}
+            </p>
+          </div>
+
+          <div className="control-group">
             <label className="control-label">Active API Provider</label>
             <select name="api_provider" className="control-input" value={settings.api_provider} onChange={handleChange}>
               <option value="openai">OpenAI</option>
@@ -131,13 +179,13 @@ export default function SettingsPage() {
           <div className="grid-2-col" style={{ gap: '16px' }}>
             <div className="control-group">
               <label className="control-label">Chunk Size (Tokens)</label>
-              <input name="chunk_size" type="number" className="control-input" value={settings.chunk_size} onChange={handleChange} />
+              <input name="chunk_size" type="number" className="control-input" value={settings.chunk_size || 1024} onChange={handleChange} />
             </div>
             <div className="control-group">
               <label className="control-label">Temperature (0.0 - 1.0)</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <input name="temperature" type="range" min="0" max="1" step="0.1" value={settings.temperature} onChange={handleChange} style={{ flex: 1 }} />
-                <span style={{ fontWeight: 600, width: '30px' }}>{settings.temperature}</span>
+                <input name="temperature" type="range" min="0" max="1" step="0.1" value={settings.temperature || 0.2} onChange={handleChange} style={{ flex: 1 }} />
+                <span style={{ fontWeight: 600, width: '30px' }}>{settings.temperature || 0.2}</span>
               </div>
             </div>
           </div>

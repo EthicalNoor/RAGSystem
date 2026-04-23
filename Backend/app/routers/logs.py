@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Dict, Any
 from app.schemas import (
     QueryLogResponse, DashboardMetricsResponse, 
     VectorDBHealthResponse, SettingsPayload
@@ -7,8 +7,11 @@ from app.schemas import (
 from app.repositories.sql_repo import SQLRepository
 from app.repositories.vector_repo import VectorRepository
 from app.dependencies import get_sql_repo, get_vector_repo
-from app.config import get_config, Config, get_logger
+from app.config import get_logger
 from datetime import datetime
+
+from google import genai
+from openai import OpenAI
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -55,25 +58,106 @@ async def get_vectordb_health(vector_repo: VectorRepository = Depends(get_vector
         last_updated=datetime.now()
     )
 
+@router.get("/graphdb/data")
+async def get_graph_data(sql_repo: SQLRepository = Depends(get_sql_repo)):
+    edges = sql_repo.get_all_graph_edges()
+    
+    nodes_set = set()
+    links = []
+    
+    for edge in edges:
+        nodes_set.add(edge.source_node)
+        nodes_set.add(edge.target_node)
+        links.append({
+            "source": edge.source_node,
+            "target": edge.target_node,
+            "relation": edge.relation
+        })
+        
+    return {
+        "total_nodes": len(nodes_set),
+        "total_edges": len(links),
+        "nodes": [{"id": n} for n in nodes_set],
+        "links": links
+    }
+
 @router.get("/settings", response_model=SettingsPayload)
-async def get_system_settings(config: Config = Depends(get_config)):
+async def get_system_settings(sql_repo: SQLRepository = Depends(get_sql_repo)):
+    settings = sql_repo.get_settings()
     return SettingsPayload(
-        api_provider=config.api_provider,
-        embedding_model=config.embedding_model,
-        llm_model=config.llm_model,
-        chunk_size=config.chunk_size,
-        temperature=config.temperature
+        api_provider=settings.api_provider or "",
+        embedding_model=settings.embedding_model or "",
+        llm_model=settings.llm_model or "",
+        chunk_size=settings.chunk_size or 1024,
+        temperature=settings.temperature or 0.2,
+        rag_type=settings.rag_type or "standard",
+        openai_api_key=settings.openai_api_key or "",
+        gemini_api_key=settings.gemini_api_key or ""
     )
 
 @router.put("/settings")
-async def update_system_settings(payload: SettingsPayload, config: Config = Depends(get_config)):
-    logger.info(f"Settings update requested. Switching to provider: {payload.api_provider}")
+async def update_system_settings(payload: SettingsPayload, sql_repo: SQLRepository = Depends(get_sql_repo)):
+    logger.info("Saving user settings directly to the database.")
     
-    # In-memory config update (In production, persist this to a DB or env file)
-    config.api_provider = payload.api_provider
-    config.embedding_model = payload.embedding_model
-    config.llm_model = payload.llm_model
-    config.chunk_size = payload.chunk_size
-    config.temperature = payload.temperature
+    update_data = payload.dict(exclude_unset=True)
+    mask = "••••••••••••••••••••••••••••••••"
     
-    return {"status": "success", "message": "Settings updated"}
+    if update_data.get('openai_api_key') == mask or not update_data.get('openai_api_key'):
+        update_data.pop('openai_api_key', None)
+    if update_data.get('gemini_api_key') == mask or not update_data.get('gemini_api_key'):
+        update_data.pop('gemini_api_key', None)
+        
+    sql_repo.update_settings(update_data)
+    
+    return {"status": "success", "message": "Settings securely saved to database."}
+
+# --- NEW: DYNAMIC MODEL FETCHING ENDPOINT ---
+@router.get("/settings/models")
+async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
+    settings = sql_repo.get_settings()
+    
+    models = {
+        "openai": {"llm": [], "embedding": []},
+        "gemini": {"llm": [], "embedding": []}
+    }
+    
+    # Fetch OpenAI Models
+    if settings.openai_api_key:
+        try:
+            client = OpenAI(api_key=settings.openai_api_key)
+            openai_models = client.models.list()
+            for m in openai_models.data:
+                # Classify based on naming convention
+                if "embed" in m.id:
+                    models["openai"]["embedding"].append(m.id)
+                elif "gpt" in m.id or "o1" in m.id or "o3" in m.id:
+                    models["openai"]["llm"].append(m.id)
+        except Exception as e:
+            logger.warning(f"Could not fetch OpenAI models (Key might be invalid): {e}")
+
+    # Fetch Gemini Models
+    if settings.gemini_api_key:
+        try:
+            client = genai.Client(api_key=settings.gemini_api_key)
+            gemini_models = client.models.list()
+            for m_info in gemini_models:
+                name = m_info.name.replace("models/", "")
+                methods = getattr(m_info, 'supported_actions', getattr(m_info, 'supported_generation_methods', []))
+                
+                if not methods: 
+                    continue
+                    
+                if "generateContent" in methods or "generateAnswer" in methods:
+                    models["gemini"]["llm"].append(name)
+                if "embedContent" in methods:
+                    models["gemini"]["embedding"].append(name)
+        except Exception as e:
+            logger.warning(f"Could not fetch Gemini models (Key might be invalid): {e}")
+            
+    # Sort models alphabetically for cleaner UI dropdowns
+    for provider in models:
+        for m_type in models[provider]:
+            # Reverse sort so newer models (like gpt-4) appear before older ones (like gpt-3)
+            models[provider][m_type].sort(reverse=True)
+            
+    return models

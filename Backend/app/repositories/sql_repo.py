@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from typing import List, Optional
-from app.models import DocumentModel, QueryLogModel
+from typing import List, Optional, Dict
+from app.models import DocumentModel, QueryLogModel, GraphEdgeModel, SystemSettingsModel
 from app.config import get_logger
 
 logger = get_logger(__name__)
@@ -8,6 +8,27 @@ logger = get_logger(__name__)
 class SQLRepository:
     def __init__(self, db: Session):
         self.db = db
+
+    def get_settings(self) -> SystemSettingsModel:
+        settings = self.db.query(SystemSettingsModel).filter_by(id="default").first()
+        if not settings:
+            settings = SystemSettingsModel(
+                id="default", api_provider="", embedding_model="", llm_model="",
+                chunk_size=1024, temperature=0.2, rag_type="standard"
+            )
+            self.db.add(settings)
+            self.db.commit()
+            self.db.refresh(settings)
+        return settings
+
+    def update_settings(self, payload: dict) -> SystemSettingsModel:
+        settings = self.get_settings()
+        for key, value in payload.items():
+            if hasattr(settings, key) and key != "id":
+                setattr(settings, key, value)
+        self.db.commit()
+        self.db.refresh(settings)
+        return settings
 
     def create_document(self, name: str, file_type: str, size_mb: float) -> DocumentModel:
         db_doc = DocumentModel(name=name, file_type=file_type, size_mb=size_mb)
@@ -38,11 +59,8 @@ class SQLRepository:
 
     def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, status: str = "Success") -> QueryLogModel:
         log = QueryLogModel(
-            query_text=query_text,
-            response_snippet=response_snippet,
-            latency_ms=latency_ms,
-            source_count=source_count,
-            status=status
+            query_text=query_text, response_snippet=response_snippet,
+            latency_ms=latency_ms, source_count=source_count, status=status
         )
         self.db.add(log)
         self.db.commit()
@@ -56,9 +74,26 @@ class SQLRepository:
         try:
             self.db.query(QueryLogModel).delete()
             self.db.commit()
-            logger.info("Successfully deleted all query logs from the database.")
             return True
         except Exception as e:
             self.db.rollback()
-            logger.error(f"Failed to delete query logs: {e}")
             raise e
+
+    def upsert_graph_edges(self, document_id: str, triplets: List[Dict[str, str]]):
+        db_edges = []
+        for triplet in triplets:
+            if "source" in triplet and "target" in triplet and "relation" in triplet:
+                edge = GraphEdgeModel(
+                    document_id=document_id,
+                    source_node=str(triplet["source"]),
+                    target_node=str(triplet["target"]),
+                    relation=str(triplet["relation"])
+                )
+                db_edges.append(edge)
+                
+        if db_edges:
+            self.db.add_all(db_edges)
+            self.db.commit()
+
+    def get_all_graph_edges(self) -> List[GraphEdgeModel]:
+        return self.db.query(GraphEdgeModel).all()

@@ -6,9 +6,14 @@ import '../styles/VectorDBPage.css';
 export default function VectorDBPage() {
   const { health, fetchHealth } = useApp();
 
-  useEffect(() => { fetchHealth(); }, [fetchHealth]);
+  // ONLY fetch health if we don't have it yet
+  useEffect(() => {
+    if (!health) {
+      fetchHealth();
+    }
+  }, [health, fetchHealth]);
 
-  if (!health) return <div>Loading vector database status...</div>;
+  if (!health) return <div style={{ padding: '20px' }}>Loading vector database status...</div>;
 
   const maxStorageMB = 1024; 
   const storagePercentage = Math.min((health.storage_used_mb / maxStorageMB) * 100, 100).toFixed(2);

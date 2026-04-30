@@ -30,7 +30,8 @@ export default function SettingsPage() {
         api_provider: globalSettings.api_provider || 'gemini',
         rag_type: globalSettings.rag_type || 'standard',
         openai_api_key: globalSettings.openai_api_key ? MASK : '',
-        gemini_api_key: globalSettings.gemini_api_key ? MASK : ''
+        gemini_api_key: globalSettings.gemini_api_key ? MASK : '',
+        database_url: globalSettings.database_url || '' // <-- Load DB URL
       });
       setKeysModified({ openai: false, gemini: false });
       
@@ -84,8 +85,7 @@ export default function SettingsPage() {
   const handleSave = async (e) => {
     e.preventDefault();
 
-    // --- ADDED CONFIRMATION ---
-    if (!window.confirm("Are you sure you want to save and apply these system configuration changes?")) return;
+    if (!window.confirm("Are you sure you want to save and apply these system configuration changes? Note: Changing the Database URL requires a server restart.")) return;
 
     setUiMessage(null);
     setIsSaving(true);
@@ -97,7 +97,7 @@ export default function SettingsPage() {
     try {
       await api.updateSettings(payload);
       await fetchSettings(); 
-      setUiMessage({ type: 'success', text: 'System configuration and API keys securely saved to database.' });
+      setUiMessage({ type: 'success', text: 'System configuration securely saved to database.' });
     } catch (err) {
       setUiMessage({ type: 'error', text: `Update Failed: ${err.message}` });
     } finally {
@@ -126,6 +126,25 @@ export default function SettingsPage() {
       
       <div className="dashboard-card" style={{ maxWidth: '700px' }}>
         <form onSubmit={handleSave}>
+
+          {/* NEW: Database URL Input */}
+          <div className="control-group">
+            <label className="control-label">Database Connection URL</label>
+            <input 
+              name="database_url" 
+              type="text" 
+              className="control-input" 
+              placeholder="postgresql://user:password@localhost:5432/db" 
+              value={settings.database_url} 
+              onChange={handleChange} 
+            />
+            <p style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.4'}}>
+              Changes to the active database URI will require a manual restart of the backend service to re-initialize the connection pool.
+            </p>
+          </div>
+
+          <hr style={{ border: 'none', borderTop: '1px solid var(--border-light)', margin: '24px 0' }} />
+
           <div className="grid-2-col" style={{ gap: '16px', marginBottom: '24px' }}>
             <div className="control-group" style={{ marginBottom: 0 }}>
               <label className="control-label">OpenAI API Key</label>

@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles  # <-- IMPORT ADDED
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.config import get_logger, get_config
@@ -12,14 +12,20 @@ from app.database import engine, Base
 logger = get_logger(__name__)
 config = get_config()
 
-# --- FIX: Ensure upload directory exists BEFORE mounting ---
 os.makedirs(config.upload_dir, exist_ok=True)
 
-# Initialize pgvector extension and create tables
 try:
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        
+        # Safely add the column if it doesn't exist to prevent the UndefinedColumn crash
+        try:
+            conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS database_url VARCHAR"))
+        except Exception as alter_err:
+            logger.warning(f"Column migration skipped or failed: {alter_err}")
+            
         conn.commit()
+        
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables and pgvector extension initialized.")
 except Exception as e:
@@ -31,10 +37,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- FIX: Mount the uploads directory to serve static PDF files ---
 app.mount("/uploads", StaticFiles(directory=config.upload_dir), name="uploads")
 
-# Apply dynamic CORS settings from .env
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins, 
@@ -57,22 +61,9 @@ app.include_router(logs.router, prefix="/api/v1/system", tags=["System & Logs"])
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    logger.info("Health check endpoint pinged.")
-    return {
-        "status": "healthy", 
-        "environment": config.environment,
-        "database": "connected"
-    }
+    return {"status": "healthy", "environment": config.environment, "database": "connected"}
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # Automatically disable 'reload' if ENVIRONMENT is set to production
     is_development = config.environment.lower() == "development"
-    
-    uvicorn.run(
-        "main:app", 
-        host=config.host, 
-        port=config.port, 
-        reload=is_development
-    )
+    uvicorn.run("main:app", host=config.host, port=config.port, reload=is_development)

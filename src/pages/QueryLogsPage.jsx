@@ -1,5 +1,6 @@
 // src/pages/QueryLogsPage.jsx
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { api, Icons, useApp } from '../store';
 import '../styles/QueryLogsPage.css';
 
@@ -13,6 +14,7 @@ export default function QueryLogsPage() {
 
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isTTSActive, setIsTTSActive] = useState(false); // TTS State
   const messagesEndRef = useRef(null);
 
   const hasDocuments = documents.length > 0;
@@ -23,7 +25,31 @@ export default function QueryLogsPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChat?.messages, isTyping]);
 
+  // Clean up TTS when unmounting or changing pages
+  useEffect(() => {
+    return () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const speakText = (text) => {
+    if (!('speechSynthesis' in window)) return;
+    
+    // Stop any ongoing speech before starting a new one
+    window.speechSynthesis.cancel();
+    
+    // Clean markdown characters (**, ##, _, `) so they aren't spoken aloud
+    const cleanText = text.replace(/[*#_`~]/g, '');
+    
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = 1.0; // Normal speed
+    window.speechSynthesis.speak(utterance);
+  };
+
   const handleNewChat = () => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setActiveChatId(null);
   };
 
@@ -31,13 +57,18 @@ export default function QueryLogsPage() {
     e.stopPropagation();
     if (window.confirm("Delete this conversation?")) {
       setConversations(prev => prev.filter(c => c.id !== id));
-      if (activeChatId === id) setActiveChatId(null);
+      if (activeChatId === id) {
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        setActiveChatId(null);
+      }
     }
   };
 
   const handleSend = async (e) => {
     e.preventDefault();
     if (!input.trim() || !hasDocuments || isTyping) return;
+
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel(); // Stop speaking previous msg
 
     const userQuery = input.trim();
     setInput('');
@@ -64,17 +95,19 @@ export default function QueryLogsPage() {
     }
 
     try {
-      // Backend inherently utilizes all active uploaded documents automatically
       const data = await api.chat(userQuery, currentChatId);
       
-      // Removed latency/sources from rendering payload to hide from UI
       const aiMsg = { role: 'ai', content: data.response };
       
       setConversations(prev => prev.map(c => 
         c.id === currentChatId ? { ...c, messages: [...c.messages, aiMsg] } : c
       ));
+
+      // Trigger Text-to-Speech if enabled
+      if (isTTSActive) {
+        speakText(data.response);
+      }
       
-      // Silently sync backend analytics
       fetchLogs();
       fetchMetrics();
     } catch (error) {
@@ -84,6 +117,13 @@ export default function QueryLogsPage() {
       ));
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const toggleTTS = () => {
+    setIsTTSActive(!isTTSActive);
+    if (isTTSActive && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Stop speaking immediately if turned off
     }
   };
 
@@ -149,9 +189,16 @@ export default function QueryLogsPage() {
                 </div>
                 <div className="message-content">
                   <div className={`bubble ${msg.content && msg.content.startsWith('Error:') ? 'error-bubble' : ''}`}>
-                    {msg.content}
+                    {msg.role === 'ai' && !msg.content.startsWith('Error:') ? (
+                      <div className="markdown-body">
+                        <ReactMarkdown>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      msg.content
+                    )}
                   </div>
-                  {/* Sources entirely hidden/removed from display layout */}
                 </div>
               </div>
             ))
@@ -180,6 +227,16 @@ export default function QueryLogsPage() {
               onChange={(e) => setInput(e.target.value)}
               disabled={!hasDocuments || isTyping}
             />
+            
+            <button 
+              type="button" 
+              className={`tts-toggle-btn ${isTTSActive ? 'active' : ''}`} 
+              onClick={toggleTTS}
+              title={isTTSActive ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}
+            >
+              {isTTSActive ? <Icons.Volume2 /> : <Icons.VolumeX />}
+            </button>
+
             <button type="submit" className="send-btn" disabled={!input.trim() || !hasDocuments || isTyping}>
               <Icons.Send />
             </button>

@@ -12,6 +12,7 @@ from datetime import datetime
 
 from google import genai
 from openai import OpenAI
+from app.security import MASK, decrypt_key # <-- IMPORT ADDED
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -84,6 +85,10 @@ async def get_graph_data(sql_repo: SQLRepository = Depends(get_sql_repo)):
 @router.get("/settings", response_model=SettingsPayload)
 async def get_system_settings(sql_repo: SQLRepository = Depends(get_sql_repo)):
     settings = sql_repo.get_settings()
+    
+    oai_display = MASK if settings.openai_api_key else ""
+    gem_display = MASK if settings.gemini_api_key else ""
+    
     return SettingsPayload(
         api_provider=settings.api_provider or "",
         embedding_model=settings.embedding_model or "",
@@ -91,8 +96,9 @@ async def get_system_settings(sql_repo: SQLRepository = Depends(get_sql_repo)):
         chunk_size=settings.chunk_size or 1024,
         temperature=settings.temperature or 0.2,
         rag_type=settings.rag_type or "standard",
-        openai_api_key=settings.openai_api_key or "",
-        gemini_api_key=settings.gemini_api_key or ""
+        database_url=settings.database_url or "",
+        openai_api_key=oai_display,
+        gemini_api_key=gem_display
     )
 
 @router.put("/settings")
@@ -111,10 +117,13 @@ async def update_system_settings(payload: SettingsPayload, sql_repo: SQLReposito
     
     return {"status": "success", "message": "Settings securely saved to database."}
 
-# --- NEW: DYNAMIC MODEL FETCHING ENDPOINT ---
 @router.get("/settings/models")
 async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
     settings = sql_repo.get_settings()
+    
+    # --- FIX: DECRYPT KEYS BEFORE API CALLS ---
+    decrypted_openai = decrypt_key(settings.openai_api_key)
+    decrypted_gemini = decrypt_key(settings.gemini_api_key)
     
     models = {
         "openai": {"llm": [], "embedding": []},
@@ -122,12 +131,11 @@ async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
     }
     
     # Fetch OpenAI Models
-    if settings.openai_api_key:
+    if decrypted_openai:
         try:
-            client = OpenAI(api_key=settings.openai_api_key)
+            client = OpenAI(api_key=decrypted_openai)
             openai_models = client.models.list()
             for m in openai_models.data:
-                # Classify based on naming convention
                 if "embed" in m.id:
                     models["openai"]["embedding"].append(m.id)
                 elif "gpt" in m.id or "o1" in m.id or "o3" in m.id:
@@ -136,9 +144,9 @@ async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
             logger.warning(f"Could not fetch OpenAI models (Key might be invalid): {e}")
 
     # Fetch Gemini Models
-    if settings.gemini_api_key:
+    if decrypted_gemini:
         try:
-            client = genai.Client(api_key=settings.gemini_api_key)
+            client = genai.Client(api_key=decrypted_gemini)
             gemini_models = client.models.list()
             for m_info in gemini_models:
                 name = m_info.name.replace("models/", "")
@@ -154,10 +162,8 @@ async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
         except Exception as e:
             logger.warning(f"Could not fetch Gemini models (Key might be invalid): {e}")
             
-    # Sort models alphabetically for cleaner UI dropdowns
     for provider in models:
         for m_type in models[provider]:
-            # Reverse sort so newer models (like gpt-4) appear before older ones (like gpt-3)
             models[provider][m_type].sort(reverse=True)
             
     return models

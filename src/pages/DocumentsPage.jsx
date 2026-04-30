@@ -12,13 +12,13 @@ export default function DocumentsPage() {
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false); // UI lock state
   const [selectedIds, setSelectedIds] = useState([]); 
   const [uiMessage, setUiMessage] = useState(null);
 
   const handleFiles = async (filesList, isFolder = false) => {
     if (!filesList.length) return;
     
-    // --- ADDED CONFIRMATION ---
     if (!window.confirm(`Are you sure you want to upload and index ${filesList.length} document(s)?`)) {
       if (fileInputRef.current) fileInputRef.current.value = '';
       if (folderInputRef.current) folderInputRef.current.value = '';
@@ -45,9 +45,9 @@ export default function DocumentsPage() {
   };
 
   const deleteDoc = async (id) => {
-    // --- ADDED CONFIRMATION ---
     if (!window.confirm("Are you sure you want to permanently delete this document and its vector data?")) return;
 
+    setIsDeleting(true); // Lock UI to prevent double-clicks
     try {
       await api.deleteDoc(id);
       
@@ -68,6 +68,8 @@ export default function DocumentsPage() {
       setSelectedIds(prev => prev.filter(selectedId => selectedId !== id));
     } catch (err) {
       setUiMessage({ type: 'error', text: `Delete failed: ${err.message}` });
+    } finally {
+      setIsDeleting(false); // Unlock UI
     }
   };
 
@@ -75,9 +77,9 @@ export default function DocumentsPage() {
   const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
 
   const handleBulkDelete = async () => {
-    // --- ADDED CONFIRMATION ---
     if (!window.confirm(`Are you sure you want to permanently delete ${selectedIds.length} document(s)?`)) return;
     
+    setIsDeleting(true); // Lock UI to prevent double-clicks
     try {
       await Promise.all(selectedIds.map(id => api.deleteDoc(id)));
       
@@ -98,11 +100,12 @@ export default function DocumentsPage() {
       setSelectedIds([]);
     } catch (err) {
       setUiMessage({ type: 'error', text: `Bulk delete failed: ${err.message}` });
+    } finally {
+      setIsDeleting(false); // Unlock UI
     }
   };
 
   const handleBulkRerun = async () => {
-    // --- ADDED CONFIRMATION ---
     if (!window.confirm(`Are you sure you want to queue ${selectedIds.length} document(s) for reprocessing?`)) return;
 
     try {
@@ -116,14 +119,12 @@ export default function DocumentsPage() {
   };
 
   const handleBulkArchive = () => {
-    // --- ADDED CONFIRMATION ---
     if (!window.confirm(`Are you sure you want to archive ${selectedIds.length} document(s)?`)) return;
 
     setUiMessage({ type: 'success', text: `Archived ${selectedIds.length} document(s) successfully.` });
     setSelectedIds([]);
   };
 
-  // Helper to open the document in a new tab
   const handleViewDocument = (fileName) => {
     const backendUrl = import.meta.env.VITE_API_BASE_URL 
       ? import.meta.env.VITE_API_BASE_URL.replace('/api/v1', '') 
@@ -151,10 +152,10 @@ export default function DocumentsPage() {
           <p style={{ fontSize: '0.85rem' }}>Supported: PDF, DOCX, TXT, CSV, Images (OCR)</p>
           
           <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
-            <button className="btn btn-primary" disabled={isUploading} onClick={() => fileInputRef.current.click()}>
+            <button className="btn btn-primary" disabled={isUploading || isDeleting} onClick={() => fileInputRef.current.click()}>
               {isUploading ? 'Uploading...' : 'Upload Files'}
             </button>
-            <button className="btn btn-secondary" disabled={isUploading} onClick={() => folderInputRef.current.click()}>
+            <button className="btn btn-secondary" disabled={isUploading || isDeleting} onClick={() => folderInputRef.current.click()}>
               Upload Folder
             </button>
           </div>
@@ -172,14 +173,19 @@ export default function DocumentsPage() {
             <span style={{ fontWeight: 600, fontSize: '0.9rem', marginRight: 'auto' }}>
               {selectedIds.length} item(s) selected
             </span>
-            <button className="btn btn-secondary" onClick={handleBulkRerun} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button className="btn btn-secondary" disabled={isDeleting} onClick={handleBulkRerun} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Icons.Activity /> Rerun Selected
             </button>
-            <button className="btn btn-secondary" onClick={handleBulkArchive} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button className="btn btn-secondary" disabled={isDeleting} onClick={handleBulkArchive} style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Icons.Archive /> Archive
             </button>
-            <button className="btn btn-secondary" onClick={handleBulkDelete} style={{ fontSize: '0.8rem', padding: '6px 12px', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Icons.Trash /> Delete
+            <button 
+              className="btn btn-secondary" 
+              onClick={handleBulkDelete} 
+              disabled={isDeleting} 
+              style={{ fontSize: '0.8rem', padding: '6px 12px', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px', opacity: isDeleting ? 0.5 : 1 }}
+            >
+              <Icons.Trash /> {isDeleting ? 'Deleting...' : 'Delete'}
             </button>
           </div>
         )}
@@ -220,7 +226,11 @@ export default function DocumentsPage() {
                       </span>
                     </td>
                     <td>
-                      <button onClick={() => deleteDoc(doc.id)} style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer', padding: '4px' }}>
+                      <button 
+                        onClick={() => deleteDoc(doc.id)} 
+                        disabled={isDeleting} 
+                        style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: isDeleting ? 'not-allowed' : 'pointer', padding: '4px', opacity: isDeleting ? 0.5 : 1 }}
+                      >
                         <Icons.Trash />
                       </button>
                     </td>

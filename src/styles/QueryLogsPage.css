@@ -148,6 +148,32 @@
   margin: 0 auto;
 }
 
+/* TTS Toggle Button */
+.tts-toggle-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition-standard);
+  margin-right: 4px;
+}
+
+.tts-toggle-btn:hover {
+  background: var(--border-light);
+  color: var(--text-main);
+}
+
+.tts-toggle-btn.active {
+  color: var(--accent-primary);
+  background: var(--accent-light);
+}
+
 .chat-footer-note {
   text-align: center;
   font-size: 0.75rem;

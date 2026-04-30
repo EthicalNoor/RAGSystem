@@ -30,7 +30,7 @@ export const api = {
   updateSettings: (data) => fetch(`${API_BASE}/system/settings`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(handleResponse),
   chat: (query, session_id) => fetch(`${API_BASE}/chat`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ query, session_id }) }).then(handleResponse),
   getGraphData: () => fetch(`${API_BASE}/system/graphdb/data`).then(handleResponse),
-  getModels: () => fetch(`${API_BASE}/system/settings/models`).then(handleResponse) // NEW ENDPOINT
+  getModels: () => fetch(`${API_BASE}/system/settings/models`).then(handleResponse)
 };
 
 export const Icons = {
@@ -49,7 +49,9 @@ export const Icons = {
   AlertCircle: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>,
   CheckCircle: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>,
   Plus: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>,
-  Network: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+  Network: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>,
+  Volume2: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>,
+  VolumeX: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
 };
 
 export const AppContext = createContext();
@@ -85,13 +87,28 @@ export const AppProvider = ({ children }) => {
     localStorage.setItem('rag_conversations', JSON.stringify(conversations));
   }, [conversations]);
 
+  // --- SMART DYNAMIC POLLING FORMULA ADDED HERE ---
   useEffect(() => {
-    const hasPending = documents.some(doc => doc.status === 'Pending' || doc.status === 'Processing');
-    if (hasPending) {
-      const intervalId = setInterval(() => {
+    const pendingDocs = documents.filter(doc => doc.status === 'Pending' || doc.status === 'Processing');
+    
+    if (pendingDocs.length > 0) {
+      let totalPendingMB = 0;
+      pendingDocs.forEach(doc => {
+        const sizeVal = parseFloat(doc.size);
+        if (!isNaN(sizeVal)) totalPendingMB += sizeVal;
+      });
+
+      let dynamicIntervalMs = Math.floor(5000 + (totalPendingMB * 1500));
+      
+      if (dynamicIntervalMs > 45000) dynamicIntervalMs = 45000;
+      if (dynamicIntervalMs < 5000) dynamicIntervalMs = 5000;
+
+      const timeoutId = setTimeout(() => {
         fetchDocuments(); 
-      }, 3000); 
-      return () => clearInterval(intervalId); 
+      }, dynamicIntervalMs); 
+      
+      return () => clearTimeout(timeoutId); 
+      
     } else if (documents.length > 0) {
       fetchMetrics();
       fetchHealth();

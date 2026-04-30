@@ -1,67 +1,66 @@
+import time
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.models import DocumentChunkModel, SystemSettingsModel
+from app.models import DocumentChunkModel
 from app.config import get_logger
+from app.repositories.sql_repo import SQLRepository
+from app.security import decrypt_key
 
 from google import genai
 from openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential 
 
 logger = get_logger(__name__)
 
 class VectorRepository:
     def __init__(self, db: Session):
         self.db = db
+        self.sql_repo = SQLRepository(db)
+        self.settings = self.sql_repo.get_settings() 
+        
+        decrypted_gemini = decrypt_key(self.settings.gemini_api_key)
+        decrypted_openai = decrypt_key(self.settings.openai_api_key)
+        
+        self.gemini_client = genai.Client(api_key=decrypted_gemini) if decrypted_gemini else None
+        self.openai_client = OpenAI(api_key=decrypted_openai) if decrypted_openai else None
+        
+        del decrypted_gemini
+        del decrypted_openai
 
-    def _get_settings(self) -> SystemSettingsModel:
-        settings = self.db.query(SystemSettingsModel).filter_by(id="default").first()
-        if not settings:
-            raise ValueError("System settings not found in database. Please check settings.")
-        return settings
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _generate_embedding_with_retry(self, text_input: str) -> List[float]:
+        return self._generate_embedding(text_input)
 
     def _generate_embedding(self, text_input: str) -> List[float]:
-        settings = self._get_settings()
-        provider = settings.api_provider
+        provider = self.settings.api_provider 
         
         try:
             if provider == "gemini":
-                if not settings.gemini_api_key:
-                    raise ValueError("Gemini API key is missing in Database settings.")
+                if not self.gemini_client:
+                    raise ValueError("Gemini API key is missing or invalid.")
                 
-                gemini_client = genai.Client(api_key=settings.gemini_api_key)
-                model = settings.embedding_model or ""
+                model = self.settings.embedding_model or "text-embedding-004"
                 model = model.replace("models/", "")
-                
                 if "text-embedding-3" in model:
                     model = "text-embedding-004"
                 
                 try:
-                    result = gemini_client.models.embed_content(
-                        model=model,
-                        contents=text_input
+                    result = self.gemini_client.models.embed_content(
+                        model=model, contents=text_input
                     )
                 except Exception as e:
-                    logger.warning(f"Embedding model '{model}' failed. Dynamically finding a supported Gemini embedding model...")
-                    
                     fallback_model = None
-                    try:
-                        for m_info in gemini_client.models.list():
-                            methods = getattr(m_info, 'supported_actions', getattr(m_info, 'supported_generation_methods', []))
-                            if methods and "embedContent" in methods:
-                                fallback_model = m_info.name.replace("models/", "")
-                                break
-                    except Exception as list_err:
-                        logger.error(f"Failed to dynamically list models: {list_err}")
+                    for m_info in self.gemini_client.models.list():
+                        methods = getattr(m_info, 'supported_actions', getattr(m_info, 'supported_generation_methods', []))
+                        if methods and "embedContent" in methods:
+                            fallback_model = m_info.name.replace("models/", "")
+                            break
 
                     if fallback_model:
-                        logger.info(f"Dynamically selected embedding model: {fallback_model}. Saving to database.")
-                        
-                        settings.embedding_model = fallback_model
-                        self.db.commit()
-                        
-                        result = gemini_client.models.embed_content(
-                            model=fallback_model,
-                            contents=text_input
+                        self.sql_repo.update_settings({"embedding_model": fallback_model})
+                        result = self.gemini_client.models.embed_content(
+                            model=fallback_model, contents=text_input
                         )
                     else:
                         raise ValueError("No supported embedding models found for this Gemini API key.") from e
@@ -69,15 +68,14 @@ class VectorRepository:
                 vec = result.embeddings[0].values
                 
             elif provider == "openai":
-                if not settings.openai_api_key:
-                    raise ValueError("OpenAI API key is missing in Database settings.")
+                if not self.openai_client:
+                    raise ValueError("OpenAI API key is missing or invalid.")
                 
-                openai_client = OpenAI(api_key=settings.openai_api_key)
-                model = settings.embedding_model
+                model = self.settings.embedding_model
                 if not model or "text-embedding-004" in model or "gemini" in model:
                     model = "text-embedding-3-small"
 
-                response = openai_client.embeddings.create(input=[text_input], model=model)
+                response = self.openai_client.embeddings.create(input=[text_input], model=model)
                 vec = response.data[0].embedding
             else:
                 raise ValueError(f"Unsupported API provider: {provider}")
@@ -95,31 +93,47 @@ class VectorRepository:
         return vec
 
     def upsert_chunks(self, document_id: str, chunks: List[Dict[str, Any]]):
-        logger.info(f"Inserting {len(chunks)} chunks into pgvector for doc {document_id}")
+        logger.info(f"Inserting {len(chunks)} chunks into pgvector via {self.settings.api_provider} for doc {document_id}")
         
         db_chunks = []
-        for chunk in chunks:
-            vector = self._generate_embedding(chunk["text"])
-            
-            db_chunk = DocumentChunkModel(
-                document_id=document_id,
-                text_content=chunk["text"],
-                embedding=vector
-            )
-            db_chunks.append(db_chunk)
-            
-        self.db.add_all(db_chunks)
-        self.db.commit()
+        batch_size = 50
 
-    def search(self, query: str, top_k: int = 10) -> List[dict]:
-        logger.info(f"Executing pgvector search for query: {query}")
+        for i, chunk in enumerate(chunks):
+            try:
+                vector = self._generate_embedding_with_retry(chunk["text"])
+                
+                db_chunk = DocumentChunkModel(
+                    document_id=document_id,
+                    text_content=chunk["text"],
+                    embedding=vector
+                )
+                db_chunks.append(db_chunk)
+                
+                if len(db_chunks) >= batch_size:
+                    self.db.add_all(db_chunks)
+                    self.db.commit()
+                    logger.info(f"Successfully committed batch of {batch_size} chunks. ({i+1}/{len(chunks)})")
+                    db_chunks = [] 
+                
+            except Exception as e:
+                logger.error(f"Critical failure on chunk {i+1} after multiple retries: {e}")
+                raise e
+                
+        if db_chunks:
+            self.db.add_all(db_chunks)
+            self.db.commit()
+            logger.info(f"Successfully committed final batch of {len(db_chunks)} chunks.")
+
+    def search(self, query: str, top_k: int = None) -> List[dict]:
+        limit = top_k if top_k is not None else self.settings.top_k
+        logger.info(f"Executing pgvector search for query: {query} (top_k={limit})")
         
-        query_vector = self._generate_embedding(query)
+        query_vector = self._generate_embedding_with_retry(query)
         
         results = (
             self.db.query(DocumentChunkModel)
             .order_by(DocumentChunkModel.embedding.cosine_distance(query_vector))
-            .limit(top_k)
+            .limit(limit)
             .all()
         )
         

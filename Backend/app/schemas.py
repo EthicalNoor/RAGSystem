@@ -49,6 +49,7 @@ class SettingsPayload(BaseModel):
     llm_model: str
     chunk_size: int
     temperature: float
-    rag_type: str  # New field: 'standard' or 'graph'
+    rag_type: str
+    database_url: Optional[str] = None
     openai_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None

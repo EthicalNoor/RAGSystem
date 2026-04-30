@@ -8,7 +8,7 @@ import DocumentsPage from './pages/DocumentsPage';
 import QueryLogsPage from './pages/QueryLogsPage';
 import VectorDBPage from './pages/VectorDBPage';
 import SettingsPage from './pages/SettingsPage';
-import GraphDBPage from './pages/GraphDBPage'; // NEW IMPORT
+import GraphDBPage from './pages/GraphDBPage'; 
 
 const APP_TITLE = import.meta.env.VITE_APP_TITLE || "RAG Control Center";
 
@@ -25,10 +25,15 @@ function MainLayout() {
   const { settings } = useApp();
   const [showSettingsPopup, setShowSettingsPopup] = useState(false);
 
+  // Global Validation Gate
   useEffect(() => {
     if (settings) {
-      const hasKeys = settings.openai_api_key || settings.gemini_api_key;
-      if (!hasKeys || !settings.api_provider) {
+      const hasApiKeys = settings.openai_api_key || settings.gemini_api_key;
+      const hasProvider = !!settings.api_provider;
+      const hasDbUrl = !!settings.database_url;
+      
+      // Require Database, Provider, and at least one LLM Key
+      if (!hasApiKeys || !hasProvider || !hasDbUrl) {
         setShowSettingsPopup(true);
       } else {
         setShowSettingsPopup(false);
@@ -58,8 +63,6 @@ function MainLayout() {
           <button className={`nav-item ${activePage === 'vectordb' ? 'active' : ''}`} onClick={() => setActivePage('vectordb')}>
             <Icons.Database /> Vector DB
           </button>
-          
-          {/* NEW GRAPH KNOWLEDGE BASE BUTTON */}
           <button className={`nav-item ${activePage === 'graphdb' ? 'active' : ''}`} onClick={() => setActivePage('graphdb')}>
             <Icons.Network /> Knowledge Graph
           </button>
@@ -74,7 +77,7 @@ function MainLayout() {
           {activePage === "documents" && <DocumentsPage />}
           {activePage === "chat" && <QueryLogsPage />}
           {activePage === "vectordb" && <VectorDBPage />}
-          {activePage === "graphdb" && <GraphDBPage />} {/* NEW ROUTE */}
+          {activePage === "graphdb" && <GraphDBPage />} 
           {activePage === "settings" && <SettingsPage />}
         </main>
       </div>
@@ -87,22 +90,22 @@ function MainLayout() {
         }}>
             <div style={{
                 background: 'var(--bg-panel)', padding: '40px', 
-                borderRadius: '12px', textAlign: 'center', maxWidth: '400px',
+                borderRadius: '12px', textAlign: 'center', maxWidth: '450px',
                 boxShadow: 'var(--shadow-lg)'
             }}>
                 <div style={{color: 'var(--error)', marginBottom: '16px', display: 'flex', justifyContent: 'center'}}>
                   <Icons.AlertCircle />
                 </div>
-                <h2 style={{color: 'var(--text-main)', fontSize: '1.4rem'}}>Please check settings.</h2>
+                <h2 style={{color: 'var(--text-main)', fontSize: '1.4rem'}}>Initialization Required</h2>
                 <p style={{margin: '16px 0', color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: '1.5'}}>
-                  You must configure your API Provider and provide valid API keys in the Settings panel before using the application.
+                  You must configure your API Provider, provide valid API keys, and confirm your Database Connection in the Settings panel before utilizing the system.
                 </p>
                 <button 
                     className="btn btn-primary" 
                     style={{width: '100%', marginTop: '8px'}}
                     onClick={() => { setShowSettingsPopup(false); setActivePage('settings'); }}
                 >
-                    Go to Settings
+                    Configure System Settings
                 </button>
             </div>
         </div>

@@ -20,6 +20,7 @@ class SystemSettingsModel(Base):
     rag_type = Column(String, default="standard")
     openai_api_key = Column(String, nullable=True)
     gemini_api_key = Column(String, nullable=True)
+    database_url = Column(String, nullable=True)
 
 class DocumentModel(Base):
     __tablename__ = "documents"
@@ -28,10 +29,9 @@ class DocumentModel(Base):
     name = Column(String, nullable=False)
     file_type = Column(String, nullable=False)
     size_mb = Column(Float, nullable=False)
-    status = Column(String, default="Pending") # Pending, Indexed, Failed
+    status = Column(String, default="Pending") 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Cascade delete chunks AND graph edges if document is removed
     chunks = relationship("DocumentChunkModel", back_populates="document", cascade="all, delete-orphan")
     graph_edges = relationship("GraphEdgeModel", back_populates="document", cascade="all, delete-orphan")
 

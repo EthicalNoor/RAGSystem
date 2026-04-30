@@ -62,7 +62,9 @@ async def delete_document(
     try:
         success = rag_svc.delete_document(document_id)
         if not success:
-            raise HTTPException(status_code=404, detail="Document not found.")
+            # If it's already deleted (e.g. from a double click), just return success anyway (Idempotent)
+            return {"status": "success", "message": "Document already deleted."}
+            
         return {"status": "success", "message": "Document deleted."}
     except Exception as e:
         logger.error(f"Failed to delete document {document_id}: {str(e)}")

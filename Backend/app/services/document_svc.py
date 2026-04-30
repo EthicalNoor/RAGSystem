@@ -2,36 +2,39 @@ import os
 import shutil
 import csv
 import docx
+import re
+from PIL import Image
+import fitz
+import pytesseract
 from fastapi import UploadFile, HTTPException
 from typing import List
-from pypdf import PdfReader
 from app.repositories.sql_repo import SQLRepository
 from app.config import Config, get_logger
 
 logger = get_logger(__name__)
+
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+OCR_LANGUAGES = "eng+hin+mar+san"
+MIN_TEXT_LENGTH_THRESHOLD = 150 
 
 class DocumentService:
     def __init__(self, sql_repo: SQLRepository, config: Config):
         self.sql_repo = sql_repo
         self.config = config
         self.upload_dir = config.upload_dir
-        # Ensure the base upload directory always exists
         os.makedirs(self.upload_dir, exist_ok=True)
 
     async def save_upload(self, file: UploadFile):
-        # Flatten folder uploads by extracting only the actual filename
         clean_name = file.filename.replace('\\', '/')
         safe_filename = clean_name.split('/')[-1]
         
         file_ext = safe_filename.split('.')[-1].upper() if '.' in safe_filename else "UNKNOWN"
         
-        # Expanded allowed file types
         allowed_extensions = ["PDF", "DOCX", "TXT", "CSV"]
         if file_ext not in allowed_extensions:
             logger.warning(f"Rejected unsupported file: {safe_filename}")
             raise HTTPException(status_code=400, detail=f"Only {', '.join(allowed_extensions)} files are supported.")
 
-        # Construct the full local path
         file_path = os.path.join(self.upload_dir, safe_filename)
         
         try:
@@ -51,11 +54,33 @@ class DocumentService:
             logger.error(f"Failed to save file {safe_filename}: {str(e)}")
             raise e
 
+    def _is_text_corrupted(self, text: str) -> bool:
+        if not text:
+            return True
+            
+        mojibake_chars = set(
+            "¡¢£¤¥¦§¨©ª«¬®¯°±²³´µ¶·¸¹º»¼½¾¿"
+            "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß"
+            "àáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+            "ﬂüœò˜—"
+        )
+        
+        garbage_score = sum(1 for c in text if c in mojibake_chars)
+        
+        if (garbage_score / max(len(text), 1)) > 0.03:
+            return True
+            
+        return False
+
+    def _clean_extracted_text(self, text: str) -> str:
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = text.replace('||', '॥').replace('।।', '॥')
+        text = text.replace(' | ', ' । ')
+        text = re.sub(r'(?<=[a-zA-Z])-(?=[a-zA-Z])\n', '', text) 
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
     def _semantic_chunk_text(self, text: str, max_chars: int, overlap_chars: int) -> List[dict]:
-        """
-        Semantic Recursive Character Text Splitting with Overlap.
-        Attempts to split on paragraphs, then sentences, then words.
-        """
         separators = ["\n\n", "\n", ". ", " "]
         
         def split_recursively(text_to_split: str, current_separators: List[str]) -> List[str]:
@@ -112,7 +137,7 @@ class DocumentService:
                 
         return final_chunks
 
-    def parse_and_chunk(self, document_id: str, chunk_size: int = 1024) -> List[dict]:
+    def parse_and_chunk(self, document_id: str, chunk_size: int = 800) -> List[dict]:
         doc = self.sql_repo.get_document(document_id)
         if not doc:
             logger.warning(f"Cannot chunk unknown document {document_id}")
@@ -129,20 +154,39 @@ class DocumentService:
             full_text = ""
             file_ext = doc.file_type
             
-            # --- Expanded Document Parsing Logic ---
             if file_ext == "PDF":
-                reader = PdfReader(file_path)
-                for page in reader.pages:
-                    text = page.extract_text()
-                    if text:
-                        full_text += text + "\n"
+                logger.info(f"Opening PDF with PyMuPDF: {doc.name}")
+                pdf_doc = fitz.open(file_path)
+                
+                for page_num in range(len(pdf_doc)):
+                    page = pdf_doc[page_num]
+                    
+                    native_text = page.get_text("text").strip()
+                    page_text = ""
+                    
+                    if len(native_text) < MIN_TEXT_LENGTH_THRESHOLD or self._is_text_corrupted(native_text):
+                        logger.info(f"Page {page_num + 1} failed quality check. Running Tesseract OCR ({OCR_LANGUAGES})...")
                         
+                        pix = page.get_pixmap(dpi=300)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        
+                        try:
+                            page_text = pytesseract.image_to_string(img, lang=OCR_LANGUAGES).strip()
+                        except Exception as ocr_err:
+                            logger.error(f"OCR Failed on page {page_num + 1}: {ocr_err}")
+                            page_text = native_text
+                    else:
+                        page_text = native_text
+                    
+                    full_text += page_text + "\n\n"
+                
+                pdf_doc.close()
+                
             elif file_ext == "DOCX":
                 doc_obj = docx.Document(file_path)
                 full_text = "\n".join([para.text for para in doc_obj.paragraphs])
                 
             elif file_ext == "TXT":
-                # 'ignore' prevents crashing on random weird bytes in plaintext
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     full_text = f.read()
                     
@@ -150,20 +194,19 @@ class DocumentService:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     reader = csv.reader(f)
                     for row in reader:
-                        # Join columns with a readable separator for the LLM
                         full_text += " | ".join(row) + "\n"
             else:
                 logger.warning(f"Unsupported file extraction for {doc.name}")
                 return []
 
-            # Fallback if no readable text is found
+            full_text = self._clean_extracted_text(full_text)
+
             if not full_text.strip():
-                logger.warning(f"No parseable text found in {doc.name}. Might require OCR.")
+                logger.warning(f"No parseable text found in {doc.name}.")
                 return [{"text": f"[Empty or Image-Only Document: {doc.name}]"}]
 
-            # 2. Semantic Chunking with Overlap Logic
-            char_chunk_size = chunk_size * 4
-            overlap_chars = int(char_chunk_size * 0.1) # 10% context overlap
+            char_chunk_size = chunk_size * 4 
+            overlap_chars = int((chunk_size * 0.125) * 4) 
             
             logger.info(f"Semantic Chunking initiated for {doc.name} (Max Chars: {char_chunk_size}, Overlap: {overlap_chars})")
             

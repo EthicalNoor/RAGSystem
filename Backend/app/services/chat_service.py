@@ -33,10 +33,6 @@ class ChatService:
             gemini_client = genai.Client(api_key=decrypted_gemini) if decrypted_gemini else None
             openai_client = OpenAI(api_key=decrypted_openai) if decrypted_openai else None
 
-            # ---------------------------------------------------------
-            # Fetch documents to define available_docs_str
-            # before it is used inside the f-string prompt below.
-            # ---------------------------------------------------------
             all_docs = self.sql_repo.get_all_documents()
             doc_names = [d.name for d in all_docs]
             available_docs_str = ", ".join(doc_names) if doc_names else "No documents uploaded."
@@ -51,34 +47,67 @@ class ChatService:
             else:
                 context_chunks = self.rag_svc.search_context(query)
 
-            sources = [chunk.get("source_document", "Unknown") for chunk in context_chunks]
-            unique_sources = list(set(sources))
+            context_text = ""
+            citations = []
+            unique_sources = set()
 
-            context_text = "\n\n".join([f"Source: {c.get('source_document')}\nContent: {c.get('text')}" for c in context_chunks])
-            
+            valid_citation_idx = 1 
+
+            for chunk in context_chunks:
+                doc_name = chunk.get("document") or chunk.get("source_document", "Unknown")
+                page_num = chunk.get("page", 1)
+                content = chunk.get("content") or chunk.get("text", "")
+                score = chunk.get("score", 1.0)
+                chunk_id = chunk.get("id", f"fallback_{valid_citation_idx}")
+                
+                # --- PRE-LLM VALIDATION FILTER ---
+                if score < 0.60:
+                    continue
+                
+                unique_sources.add(doc_name)
+
+                context_text += f"[{valid_citation_idx}] Document: {doc_name} (Page {page_num})\nContent: {content}\n\n"
+                
+                citations.append({
+                    "citation_idx": valid_citation_idx,
+                    "id": chunk_id,
+                    "document": doc_name,
+                    "page": page_num,
+                    "content": content,
+                    "score": score
+                })
+                
+                valid_citation_idx += 1
+
+            # ==========================================
+            # CONVERSATIONAL 3D AVATAR PROMPT
+            # ==========================================
             prompt = (
                 f"SYSTEM DIRECTIVES & PERSONA:\n"
-                f"You are a highly revered, wise, and calm 'Mahan Pandit' or 'Gyani' (spiritual sage/mentor) integrated into a Retrieval-Augmented Generation (RAG) system containing Hindu scriptures.\n"
-                f"Your role is to guide the user with profound, spiritually aligned wisdom. \n\n"
-                f"CRITICAL RULE - CONCISENESS & CONVERSATION FLOW:\n"
-                f"Do NOT provide overly long, detailed, or descriptive essays. Answer ONLY what the user has explicitly asked. "
-                f"Speak like a true Gyani who gives exactly the wisdom needed for that moment—brief, profound, and to the point—allowing the seeker (user) to absorb the knowledge and ask follow-up queries naturally in the next chat. Less is more.\n\n"
-                f"RESPONSE STRUCTURE:\n"
-                f"1. Spiritual Greeting: ALWAYS begin with an affectionate and culturally appropriate greeting (e.g., 'Priya Atman', 'Vatsa', 'Priya Mitra').\n"
-                f"2. Core Answer: Give a concise, practical, and empathetic answer directly addressing the user's query.\n"
-                f"3. Scriptural Touch (Optional but preferred): Briefly mention a relevant concept from the provided context (e.g., Gita, Ramayana) without over-explaining. Only include what is strictly necessary.\n"
-                f"4. Spiritual Closing: ALWAYS end with a spiritual sign-off tailored to the emotional tone of the query.\n"
-                f"   - If the user is sad/stressed: 'Narayan sab theek karenge', 'Ishwar par vishwas rakhein', 'Om Shanti'.\n"
-                f"   - If general/curious: 'Jay Shri Ram', 'Kalyanam Astu', 'Narayan Narayan'.\n\n"
-                f"MULTILINGUAL SUPPORT:\n"
-                f"Detect the user's language automatically (English, Hindi, Hinglish, Marathi) and respond in the SAME language.\n"
-                f"For Hinglish, use a natural mix of Hindi + English in Roman script.\n\n"
-                f"STRICT RAG RULES:\n"
-                f"1. ONLY use the retrieved document context below.\n"
-                f"2. DO NOT hallucinate shlokas or references.\n"
-                f"3. If the exact reference is NOT found in the context, concisely say: 'Iska exact reference uplabdh granthon me spasht roop se nahi mila, lekin samanya dharmik drishtikon se...' and give a brief, wise thought.\n\n"
+                f"You are a wise, empathetic, and conversational 'Panditji' powering a 3D interactive avatar. "
+                f"Speak naturally as if talking to a person face-to-face. DO NOT output essays, lists, steps, or academic frameworks. Keep it conversational, warm, and very brief.\n\n"
+                
+                f"STRICT CITATION RULES (MUST FOLLOW):\n"
+                f"1. LIMIT SOURCES: Use ONLY 1 (maximum 2) highly relevant citation per response. Quality over quantity.\n"
+                f"2. INLINE CITATION: Add the marker (e.g., [1]) immediately after the referenced thought.\n"
+                f"3. PREFER STORIES (ITIHAS): Whenever possible, relate their problem to a character, story, or direct event from the provided texts rather than just giving a generic rule. Show, don't just tell.\n"
+                f"4. EXACT MEANING MATCH: If the provided context does not directly answer their specific dilemma or the connection is weak, DO NOT force a citation. Just give wise advice and seamlessly continue the conversation.\n"
+                f"5. NO FORCED COMBINATIONS: Don't stitch together random shlokas just to sound holy. Provide ONE clear, grounded insight.\n\n"
+                
+                f"ANSWER STRUCTURE (CONVERSATIONAL MAPPING):\n"
+                f"Your response MUST be short (3-4 sentences maximum) and flow naturally:\n"
+                f"- Part 1 (Empathy): Acknowledge their specific pain point warmly in one short sentence.\n"
+                f"- Part 2 (Grounded Insight): Give ONE clear piece of guidance or a short story/example derived strictly from the provided context (with citation [X]).\n"
+                f"- Part 3 (Interaction): End with a simple, empathetic follow-up question to keep the conversation going (e.g., 'Tumhe kya lagta hai is baare mein?', 'Kya tumne unse is vishay par khul kar baat ki hai?'). DO NOT end with a conclusion.\n\n"
+                
+                f"TONE & LANGUAGE:\n"
+                f"Detect the user's language automatically. If Hinglish, speak like a modern, wise elder. Avoid robotic terms like 'vyavaharik framework', 'tarkik nishkarsh', or 'vishleshan'. Use words like 'Dharma', 'Karm', 'Dhairya', and 'Samajh'.\n\n"
+                
                 f"System Meta-Data: The user currently has the following documents uploaded: [{available_docs_str}].\n\n"
-                f"CONTEXT:\n{context_text}\n\n"
+                
+                f"CONTEXT DATA (Filtered for Relevance):\n"
+                f"{context_text if context_text else 'No highly relevant context found.'}\n\n"
+                
                 f"USER QUESTION / PROBLEM: {query}"
             )
 
@@ -126,8 +155,13 @@ class ChatService:
             )
 
             return ChatResponse(
-                response=llm_answer, sources=unique_sources,
-                latency_ms=latency_ms, query_id=log_entry.id, status="Success"
+                response=llm_answer, 
+                citations=citations, 
+                sources=list(unique_sources),
+                latency_ms=latency_ms, 
+                query_id=log_entry.id, 
+                message_id=log_entry.id, 
+                status="Success"
             )
 
         except Exception as e:
@@ -182,7 +216,8 @@ class ChatService:
                 seen.add(context_text)
                 context_results.append({
                     "text": context_text,
-                    "source_document": doc_name
+                    "source_document": doc_name,
+                    "score": 0.85 
                 })
 
         return context_results

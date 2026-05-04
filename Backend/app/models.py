@@ -32,6 +32,7 @@ class DocumentModel(Base):
     status = Column(String, default="Pending") 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Bidirectional relationships
     chunks = relationship("DocumentChunkModel", back_populates="document", cascade="all, delete-orphan")
     graph_edges = relationship("GraphEdgeModel", back_populates="document", cascade="all, delete-orphan")
 
@@ -40,10 +41,15 @@ class DocumentChunkModel(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    
+    # --- ADDED FOR CITATION MAPPING ---
+    page_number = Column(Integer, nullable=True) 
+    
     text_content = Column(Text, nullable=False)
     embedding = Column(Vector(1536), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # --- RESTORED TO FIX SQLALCHEMY MAPPER ERROR ---
     document = relationship("DocumentModel", back_populates="chunks")
 
 class GraphEdgeModel(Base):

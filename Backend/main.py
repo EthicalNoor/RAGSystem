@@ -16,16 +16,28 @@ os.makedirs(config.upload_dir, exist_ok=True)
 
 try:
     with engine.connect() as conn:
+        # Ensure pgvector is installed
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         
-        # Safely add the column if it doesn't exist to prevent the UndefinedColumn crash
+        # --- SAFE MIGRATIONS ---
+        
+        # 1. Safely add database_url to system_settings if missing
         try:
             conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS database_url VARCHAR"))
         except Exception as alter_err:
-            logger.warning(f"Column migration skipped or failed: {alter_err}")
+            logger.warning(f"system_settings migration skipped or failed: {alter_err}")
+
+        # 2. FIX: Safely add the new page_number column to document_chunks
+        try:
+            logger.info("Checking for 'page_number' column in document_chunks...")
+            conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page_number INTEGER"))
+            logger.info("Successfully ensured 'page_number' column exists.")
+        except Exception as alter_err:
+            logger.warning(f"document_chunks migration skipped or failed: {alter_err}")
             
         conn.commit()
         
+    # Create any entirely new tables
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables and pgvector extension initialized.")
 except Exception as e:

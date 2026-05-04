@@ -188,3 +188,19 @@
   width: 100%;
   padding: 0 40px;
 }
+
+/* Highlight selected AI message to indicate it is tied to the right panel */
+.message-row.selected-msg .bubble {
+  box-shadow: 0 0 0 2px var(--accent-primary);
+  transition: all 0.2s ease;
+}
+
+/* Style for the inline [1] markers inside the Markdown */
+.bubble code {
+  background: var(--accent-light);
+  color: var(--accent-primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+}

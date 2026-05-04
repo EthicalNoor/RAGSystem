@@ -1,3 +1,5 @@
+# app/schemas.py
+
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
@@ -13,9 +15,20 @@ class DocumentResponse(BaseModel):
 class ChatRequest(BaseModel):
     query: str
 
+# --- NEW: Explicit Citation Schema ---
+class Citation(BaseModel):
+    citation_idx: int
+    id: str
+    document: str
+    page: int
+    content: str
+    score: float
+
 class ChatResponse(BaseModel):
     response: str
     sources: List[str]
+    citations: List[Citation] = []  # <-- ADDED: Tells FastAPI to send citations
+    message_id: str                 # <-- ADDED: Tells FastAPI to send the ID
     latency_ms: int
     query_id: str
     status: str

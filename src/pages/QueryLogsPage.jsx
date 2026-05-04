@@ -14,11 +14,16 @@ export default function QueryLogsPage() {
 
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [isTTSActive, setIsTTSActive] = useState(false); // TTS State
+  const [isTTSActive, setIsTTSActive] = useState(false);
+  const [activeMessageId, setActiveMessageId] = useState(null); // Tracks active citations panel
   const messagesEndRef = useRef(null);
 
   const hasDocuments = documents.length > 0;
   const activeChat = conversations.find(c => c.id === activeChatId) || null;
+  
+  // Isolate citations for the currently clicked AI message
+  const activeMessage = activeChat?.messages.find(m => m.id === activeMessageId);
+  const activeCitations = activeMessage?.citations || [];
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
@@ -36,21 +41,17 @@ export default function QueryLogsPage() {
 
   const speakText = (text) => {
     if (!('speechSynthesis' in window)) return;
-    
-    // Stop any ongoing speech before starting a new one
     window.speechSynthesis.cancel();
-    
-    // Clean markdown characters (**, ##, _, `) so they aren't spoken aloud
-    const cleanText = text.replace(/[*#_`~]/g, '');
-    
+    const cleanText = text.replace(/[*#_`~\[\]]/g, ''); // Strips [1] markers for TTS
     const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.rate = 1.0; // Normal speed
+    utterance.rate = 1.0;
     window.speechSynthesis.speak(utterance);
   };
 
   const handleNewChat = () => {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setActiveChatId(null);
+    setActiveMessageId(null);
   };
 
   const handleDeleteChat = (e, id) => {
@@ -60,6 +61,7 @@ export default function QueryLogsPage() {
       if (activeChatId === id) {
         if ('speechSynthesis' in window) window.speechSynthesis.cancel();
         setActiveChatId(null);
+        setActiveMessageId(null);
       }
     }
   };
@@ -68,14 +70,14 @@ export default function QueryLogsPage() {
     e.preventDefault();
     if (!input.trim() || !hasDocuments || isTyping) return;
 
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel(); // Stop speaking previous msg
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 
     const userQuery = input.trim();
     setInput('');
     setIsTyping(true);
 
     let currentChatId = activeChatId;
-    const userMsg = { role: 'user', content: userQuery };
+    const userMsg = { id: Date.now().toString(), role: 'user', content: userQuery };
 
     // Generate new persistent conversation if starting fresh
     if (!currentChatId) {
@@ -97,13 +99,20 @@ export default function QueryLogsPage() {
     try {
       const data = await api.chat(userQuery, currentChatId);
       
-      const aiMsg = { role: 'ai', content: data.response };
+      const aiMsg = { 
+        id: data.message_id || data.query_id || Date.now().toString(), 
+        role: 'ai', 
+        content: data.response,
+        citations: data.citations || [] 
+      };
       
       setConversations(prev => prev.map(c => 
         c.id === currentChatId ? { ...c, messages: [...c.messages, aiMsg] } : c
       ));
 
-      // Trigger Text-to-Speech if enabled
+      // Auto-open citations panel for the newest AI response
+      setActiveMessageId(aiMsg.id);
+
       if (isTTSActive) {
         speakText(data.response);
       }
@@ -111,7 +120,7 @@ export default function QueryLogsPage() {
       fetchLogs();
       fetchMetrics();
     } catch (error) {
-      const errorMsg = { role: 'ai', content: `Error: ${error.message}` };
+      const errorMsg = { id: Date.now().toString(), role: 'ai', content: `Error: ${error.message}` };
       setConversations(prev => prev.map(c => 
         c.id === currentChatId ? { ...c, messages: [...c.messages, errorMsg] } : c
       ));
@@ -123,13 +132,13 @@ export default function QueryLogsPage() {
   const toggleTTS = () => {
     setIsTTSActive(!isTTSActive);
     if (isTTSActive && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Stop speaking immediately if turned off
+      window.speechSynthesis.cancel();
     }
   };
 
   return (
     <div className="unified-chat-layout">
-      {/* Persistent Left Sidebar for Conversation History */}
+      {/* 1. Persistent Left Sidebar for Conversation History */}
       <div className="chat-history-sidebar">
         <button className="new-chat-btn" onClick={handleNewChat}>
           <Icons.Plus /> New Chat
@@ -145,7 +154,7 @@ export default function QueryLogsPage() {
               <div 
                 key={chat.id} 
                 className={`chat-history-item ${activeChatId === chat.id ? 'active' : ''}`}
-                onClick={() => setActiveChatId(chat.id)}
+                onClick={() => { setActiveChatId(chat.id); setActiveMessageId(null); }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
                   <Icons.MessageSquare />
@@ -153,11 +162,7 @@ export default function QueryLogsPage() {
                     {chat.title}
                   </span>
                 </div>
-                <button 
-                  className="delete-chat-icon" 
-                  onClick={(e) => handleDeleteChat(e, chat.id)}
-                  title="Delete Chat"
-                >
+                <button className="delete-chat-icon" onClick={(e) => handleDeleteChat(e, chat.id)}>
                   <Icons.Trash />
                 </button>
               </div>
@@ -166,85 +171,136 @@ export default function QueryLogsPage() {
         </div>
       </div>
 
-      {/* Main Chat Interface */}
-      <div className="chat-main-area">
-        {!hasDocuments && (
-          <div className="warning-banner">
-            ⚠️ No documents uploaded. Please upload documents in the "Documents" tab before asking AI.
-          </div>
-        )}
-
-        <div className="chat-messages-container">
-          {!activeChat ? (
-            <div className="empty-chat-state">
-              <div className="empty-chat-icon"><Icons.Bot /></div>
-              <h2>How can I help you today?</h2>
-              <p>Type a message below to start a new conversation using your securely uploaded knowledge base.</p>
+      {/* NEW: 2-Column Wrapper for Chat & Citations */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        
+        {/* 2. Main Chat Area */}
+        <div className="chat-main-area" style={{ flex: activeMessageId ? '0 0 65%' : '1', transition: 'flex 0.3s ease' }}>
+          {!hasDocuments && (
+            <div className="warning-banner">
+              ⚠️ No documents uploaded. Please upload documents in the "Documents" tab before asking AI.
             </div>
-          ) : (
-            activeChat.messages.map((msg, idx) => (
-              <div key={idx} className={`message-row ${msg.role}`}>
-                <div className={`avatar ${msg.role}`}>
-                  {msg.role === 'ai' ? <Icons.Bot /> : <Icons.User />}
+          )}
+
+          <div className="chat-messages-container" style={{ padding: '32px 20px' }}>
+            {!activeChat ? (
+              <div className="empty-chat-state">
+                <div className="empty-chat-icon"><Icons.Bot /></div>
+                <h2>How can I help you today?</h2>
+                <p>Type a message below to start a conversation using your securely uploaded knowledge base.</p>
+              </div>
+            ) : (
+              activeChat.messages.map((msg, idx) => (
+                <div 
+                  key={msg.id || idx} 
+                  className={`message-row ${msg.role} ${activeMessageId === msg.id ? 'selected-msg' : ''}`}
+                  onClick={() => msg.role === 'ai' && setActiveMessageId(msg.id)}
+                  style={{ cursor: msg.role === 'ai' ? 'pointer' : 'default', maxWidth: '100%' }}
+                >
+                  <div className={`avatar ${msg.role}`}>
+                    {msg.role === 'ai' ? <Icons.Bot /> : <Icons.User />}
+                  </div>
+                  <div className="message-content" style={{ width: '100%' }}>
+                    <div className={`bubble ${msg.content && msg.content.startsWith('Error:') ? 'error-bubble' : ''}`}>
+                      {msg.role === 'ai' && !msg.content.startsWith('Error:') ? (
+                        <div className="markdown-body">
+                          <ReactMarkdown>
+                            {/* Regex to wrap [1] markers in a stylable inline code element */}
+                            {msg.content.replace(/\[(\d+)\]/g, '`[$1]`')}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        msg.content
+                      )}
+                    </div>
+                  </div>
                 </div>
+              ))
+            )}
+            
+            {isTyping && (
+              <div className="message-row ai">
+                <div className="avatar ai"><Icons.Bot /></div>
                 <div className="message-content">
-                  <div className={`bubble ${msg.content && msg.content.startsWith('Error:') ? 'error-bubble' : ''}`}>
-                    {msg.role === 'ai' && !msg.content.startsWith('Error:') ? (
-                      <div className="markdown-body">
-                        <ReactMarkdown>
-                          {msg.content}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      msg.content
-                    )}
+                  <div className="bubble" style={{ padding: '12px 18px' }}>
+                    <div className="typing-dots"><span></span><span></span><span></span></div>
                   </div>
                 </div>
               </div>
-            ))
-          )}
-          
-          {isTyping && (
-            <div className="message-row ai">
-              <div className="avatar ai"><Icons.Bot /></div>
-              <div className="message-content">
-                <div className="bubble" style={{ padding: '12px 18px' }}>
-                  <div className="typing-dots"><span></span><span></span><span></span></div>
-                </div>
-              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Unified Sticky Input Area */}
+          <div className="chat-input-area" style={{ padding: '20px' }}>
+            <form className="input-wrapper" onSubmit={handleSend} style={{ maxWidth: '100%' }}>
+              <input 
+                type="text" 
+                placeholder={hasDocuments ? "Ask AI..." : "Upload documents to begin..."}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                disabled={!hasDocuments || isTyping}
+              />
+              <button 
+                type="button" 
+                className={`tts-toggle-btn ${isTTSActive ? 'active' : ''}`} 
+                onClick={toggleTTS}
+                title={isTTSActive ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}
+              >
+                {isTTSActive ? <Icons.Volume2 /> : <Icons.VolumeX />}
+              </button>
+              <button type="submit" className="send-btn" disabled={!input.trim() || !hasDocuments || isTyping}>
+                <Icons.Send />
+              </button>
+            </form>
+            <div className="chat-footer-note">
+              Click any AI response to view exact document sources and confidence scores.
             </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Unified Sticky Input Area */}
-        <div className="chat-input-area">
-          <form className="input-wrapper" onSubmit={handleSend}>
-            <input 
-              type="text" 
-              placeholder={hasDocuments ? "Message Ask AI..." : "Upload documents to begin..."}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={!hasDocuments || isTyping}
-            />
-            
-            <button 
-              type="button" 
-              className={`tts-toggle-btn ${isTTSActive ? 'active' : ''}`} 
-              onClick={toggleTTS}
-              title={isTTSActive ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}
-            >
-              {isTTSActive ? <Icons.Volume2 /> : <Icons.VolumeX />}
-            </button>
-
-            <button type="submit" className="send-btn" disabled={!input.trim() || !hasDocuments || isTyping}>
-              <Icons.Send />
-            </button>
-          </form>
-          <div className="chat-footer-note">
-            AI can make mistakes. Verify important information.
           </div>
         </div>
+
+        {/* 3. Right Citation Verification Panel */}
+        {activeMessageId && (
+          <div style={{ width: '35%', background: 'var(--bg-panel)', borderLeft: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '1.1rem', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Icons.Database /> Document Sources
+              </h3>
+              <button 
+                onClick={() => setActiveMessageId(null)} 
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                ✖
+              </button>
+            </div>
+            
+            <div style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {activeCitations.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', marginTop: '40px' }}>
+                  <Icons.Folder />
+                  <p style={{ marginTop: '8px' }}>No direct citations mapped for this response.</p>
+                </div>
+              ) : (
+                activeCitations.map((cite) => (
+                  <div key={cite.citation_idx} style={{ background: 'var(--bg-app)', border: '1px solid var(--border-medium)', borderRadius: '8px', padding: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={{ fontWeight: 'bold', color: 'var(--accent-primary)', fontSize: '0.9rem' }}>
+                        [{cite.citation_idx}] {cite.document}
+                      </span>
+                      <span className="badge badge-info">Pg {cite.page}</span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                      Confidence Match: {(cite.score * 100).toFixed(1)}%
+                    </div>
+                    <p style={{ fontSize: '0.9rem', color: 'var(--text-main)', lineHeight: '1.6', background: 'var(--bg-panel)', padding: '12px', borderRadius: '4px', borderLeft: '3px solid var(--accent-primary)' }}>
+                      "{cite.content}"
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -47,25 +47,39 @@ class ChatService:
             else:
                 context_chunks = self.rag_svc.search_context(query)
 
+            # ---------------------------------------------------------
+            # STRICT FILTERING & SORTING (The "Top 1" Absolute Rule)
+            # ---------------------------------------------------------
+            # Sort chunks by highest confidence score first
+            context_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
+            
+            top_filtered_chunks = []
+            for c in context_chunks:
+                # SWEET SPOT: 0.65 allows abstract philosophical matches, but still blocks complete garbage.
+                if c.get("score", 0) >= 0.65: 
+                    top_filtered_chunks.append(c)
+                # RUTHLESSLY limit to exactly 1 source maximum to prevent citation overload
+                if len(top_filtered_chunks) >= 1:
+                    break
+
             context_text = ""
             citations = []
             unique_sources = set()
-
             valid_citation_idx = 1 
 
-            for chunk in context_chunks:
+            for chunk in top_filtered_chunks:
                 doc_name = chunk.get("document") or chunk.get("source_document", "Unknown")
                 page_num = chunk.get("page", 1)
                 content = chunk.get("content") or chunk.get("text", "")
                 score = chunk.get("score", 1.0)
                 chunk_id = chunk.get("id", f"fallback_{valid_citation_idx}")
                 
-                # --- PRE-LLM VALIDATION FILTER ---
-                if score < 0.60:
-                    continue
-                
                 unique_sources.add(doc_name)
 
+                # Truncate content for the UI drastically so it's a small anchor, not a book page
+                ui_display_content = content[:200] + "..." if len(content) > 200 else content
+
+                # Format text for LLM injection
                 context_text += f"[{valid_citation_idx}] Document: {doc_name} (Page {page_num})\nContent: {content}\n\n"
                 
                 citations.append({
@@ -73,40 +87,39 @@ class ChatService:
                     "id": chunk_id,
                     "document": doc_name,
                     "page": page_num,
-                    "content": content,
+                    "content": ui_display_content,
                     "score": score
                 })
                 
                 valid_citation_idx += 1
 
             # ==========================================
-            # CONVERSATIONAL 3D AVATAR PROMPT
+            # 3D AVATAR PANDITJI PROMPT (Hyper-Conversational)
             # ==========================================
             prompt = (
                 f"SYSTEM DIRECTIVES & PERSONA:\n"
-                f"You are a wise, empathetic, and conversational 'Panditji' powering a 3D interactive avatar. "
-                f"Speak naturally as if talking to a person face-to-face. DO NOT output essays, lists, steps, or academic frameworks. Keep it conversational, warm, and very brief.\n\n"
+                f"You are a wise, empathetic, and highly conversational 'Panditji' powering a 3D interactive voice avatar. "
+                f"Speak naturally, emotionally, and briefly, as if talking to a person face-to-face. "
+                f"NEVER use lists, steps, academic frameworks, or formal analysis. Be a warm guide.\n\n"
                 
-                f"STRICT CITATION RULES (MUST FOLLOW):\n"
-                f"1. LIMIT SOURCES: Use ONLY 1 (maximum 2) highly relevant citation per response. Quality over quantity.\n"
-                f"2. INLINE CITATION: Add the marker (e.g., [1]) immediately after the referenced thought.\n"
-                f"3. PREFER STORIES (ITIHAS): Whenever possible, relate their problem to a character, story, or direct event from the provided texts rather than just giving a generic rule. Show, don't just tell.\n"
-                f"4. EXACT MEANING MATCH: If the provided context does not directly answer their specific dilemma or the connection is weak, DO NOT force a citation. Just give wise advice and seamlessly continue the conversation.\n"
-                f"5. NO FORCED COMBINATIONS: Don't stitch together random shlokas just to sound holy. Provide ONE clear, grounded insight.\n\n"
+                f"STRICT CITATION & KNOWLEDGE RULES:\n"
+                f"1. ONE ANCHOR CITATION ONLY: If the provided context contains a highly relevant story, character (Itihas), or exact principle, use it and add the [1] marker at the end of that sentence.\n"
+                f"2. DO NOT FORCE CITATIONS: If the context is generic or a weak match, DO NOT cite it. Rely on your base wisdom instead. Say 'Citation not found' internally by just not placing any [X] marker.\n"
+                f"3. SHORT & DIRECT: Deliver ONE core insight. Do not explain multiple viewpoints.\n\n"
                 
-                f"ANSWER STRUCTURE (CONVERSATIONAL MAPPING):\n"
-                f"Your response MUST be short (3-4 sentences maximum) and flow naturally:\n"
-                f"- Part 1 (Empathy): Acknowledge their specific pain point warmly in one short sentence.\n"
-                f"- Part 2 (Grounded Insight): Give ONE clear piece of guidance or a short story/example derived strictly from the provided context (with citation [X]).\n"
-                f"- Part 3 (Interaction): End with a simple, empathetic follow-up question to keep the conversation going (e.g., 'Tumhe kya lagta hai is baare mein?', 'Kya tumne unse is vishay par khul kar baat ki hai?'). DO NOT end with a conclusion.\n\n"
+                f"CONVERSATIONAL STRUCTURE (CRITICAL):\n"
+                f"Your response MUST be maximum 3 to 4 sentences in total.\n"
+                f"- Part 1: Emotional Validation (Acknowledge their pain/dilemma warmly in one sentence).\n"
+                f"- Part 2: Core Insight (One brief piece of guidance or a short relevant story from the context, marked with [1] if used).\n"
+                f"- Part 3: Interactive Hook (End with a short, empathetic question to invite them to speak again, e.g., 'Tumhara man is baare mein kya kehta hai?').\n\n"
                 
                 f"TONE & LANGUAGE:\n"
-                f"Detect the user's language automatically. If Hinglish, speak like a modern, wise elder. Avoid robotic terms like 'vyavaharik framework', 'tarkik nishkarsh', or 'vishleshan'. Use words like 'Dharma', 'Karm', 'Dhairya', and 'Samajh'.\n\n"
+                f"Detect the user's language automatically (English, Hindi, Hinglish, Marathi) and respond in the SAME language seamlessly.\n\n"
                 
-                f"System Meta-Data: The user currently has the following documents uploaded: [{available_docs_str}].\n\n"
+                f"System Meta-Data: Documents uploaded: [{available_docs_str}].\n\n"
                 
-                f"CONTEXT DATA (Filtered for Relevance):\n"
-                f"{context_text if context_text else 'No highly relevant context found.'}\n\n"
+                f"CONTEXT DATA (Top 1 Most Relevant Extract Only):\n"
+                f"{context_text if context_text else 'No exact match found. Provide un-cited general wisdom.'}\n\n"
                 
                 f"USER QUESTION / PROBLEM: {query}"
             )

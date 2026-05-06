@@ -1,5 +1,3 @@
-# app/schemas.py
-
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
@@ -14,8 +12,8 @@ class DocumentResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     query: str
+    session_id: Optional[str] = None  # <-- Tracks conversation threads
 
-# --- NEW: Explicit Citation Schema ---
 class Citation(BaseModel):
     citation_idx: int
     id: str
@@ -27,8 +25,8 @@ class Citation(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     sources: List[str]
-    citations: List[Citation] = []  # <-- ADDED: Tells FastAPI to send citations
-    message_id: str                 # <-- ADDED: Tells FastAPI to send the ID
+    citations: List[Citation] = []  
+    message_id: str                 
     latency_ms: int
     query_id: str
     status: str

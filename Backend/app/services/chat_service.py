@@ -21,7 +21,7 @@ class ChatService:
         self.rag_svc = rag_svc
         self.sql_repo = sql_repo
 
-    async def process_query(self, query: str) -> ChatResponse:
+    async def process_query(self, query: str, session_id: str = None) -> ChatResponse:
         start_time = time.time()
         
         try:
@@ -37,6 +37,83 @@ class ChatService:
             doc_names = [d.name for d in all_docs]
             available_docs_str = ", ".join(doc_names) if doc_names else "No documents uploaded."
 
+            # ==========================================
+            # 1. CONVERSATION MEMORY & RECURSIVE SUMMARIZATION
+            # ==========================================
+            # Explanation: How Chat History is Stored
+            # All messages are saved in QueryLogModel with a shared session_id.
+            # A separate ChatSessionModel stores the rolling summary.
+            
+            MAX_HISTORY_CHARS = 3000   # Token limit threshold
+            KEEP_RECENT_MESSAGES = 2   # Keep last N turns unsummarized for exact context
+            
+            current_summary = ""
+            recent_messages_text = ""
+            
+            if session_id:
+                session = self.sql_repo.get_or_create_chat_session(session_id)
+                current_summary = session.summary or ""
+                unsummarized_logs = self.sql_repo.get_unsummarized_logs(session_id)
+                
+                unsummarized_text = ""
+                for log in unsummarized_logs:
+                    unsummarized_text += f"User: {log.query_text}\nAI: {log.response_snippet}\n\n"
+                    
+                total_len = len(current_summary) + len(unsummarized_text)
+                
+                # Explanation: How Summarization is Triggered
+                # Triggered only when the uncompressed history breaches the MAX_HISTORY_CHARS limit.
+                if total_len > MAX_HISTORY_CHARS and len(unsummarized_logs) > KEEP_RECENT_MESSAGES:
+                    
+                    # Explanation: How Recursive Summarization Works
+                    # We take the existing summary, append the older raw messages, and ask the LLM
+                    # to generate a single compressed block. The very recent messages are spared.
+                    logs_to_summarize = unsummarized_logs[:-KEEP_RECENT_MESSAGES]
+                    logs_to_keep = unsummarized_logs[-KEEP_RECENT_MESSAGES:]
+                    
+                    text_to_summarize = ""
+                    for log in logs_to_summarize:
+                        text_to_summarize += f"User: {log.query_text}\nAI: {log.response_snippet}\n\n"
+                        
+                    summarize_prompt = (
+                        "You are an AI tasked with maintaining a rolling memory for a conversation. "
+                        "Combine the EXISTING SUMMARY with the NEW MESSAGES into a concise, updated summary. "
+                        "Preserve important facts, user emotions, decisions, and context. Do NOT lose key information.\n\n"
+                        f"EXISTING SUMMARY:\n{current_summary if current_summary else 'None'}\n\n"
+                        f"NEW MESSAGES TO SUMMARIZE:\n{text_to_summarize}\n\n"
+                        "NEW UPDATED SUMMARY:"
+                    )
+                    
+                    # Trigger LLM for summarization
+                    if settings.api_provider == "gemini":
+                        summ_resp = gemini_client.models.generate_content(
+                            model=settings.llm_model.replace("models/", "") if "gemini" in settings.llm_model else "gemini-2.5-pro", 
+                            contents=summarize_prompt, config=types.GenerateContentConfig(temperature=0.3)
+                        )
+                        new_summary = summ_resp.text
+                    else:
+                        summ_resp = openai_client.chat.completions.create(
+                            model=settings.llm_model if "gpt" in settings.llm_model else "gpt-4o", 
+                            messages=[{"role": "user", "content": summarize_prompt}], temperature=0.3
+                        )
+                        new_summary = summ_resp.choices[0].message.content
+                        
+                    # Save new summary and mark processed logs as summarized
+                    log_ids_to_mark = [log.id for log in logs_to_summarize]
+                    self.sql_repo.update_session_summary(session_id, new_summary, log_ids_to_mark)
+                    
+                    current_summary = new_summary
+                    
+                    # Rebuild recent messages context block with what we spared
+                    for log in logs_to_keep:
+                        recent_messages_text += f"User: {log.query_text}\nAI: {log.response_snippet}\n\n"
+                else:
+                    recent_messages_text = unsummarized_text
+
+
+            # ==========================================
+            # 2. RAG RETRIEVAL (Vector / Graph Search)
+            # ==========================================
             if settings.rag_type == "graph":
                 logger.info("Executing DB-Level Knowledge Graph retrieval...")
                 context_chunks = self._graph_search(query, settings, gemini_client, openai_client)
@@ -50,7 +127,6 @@ class ChatService:
             # ---------------------------------------------------------
             # STRICT FILTERING & SORTING (The "Top 1" Absolute Rule)
             # ---------------------------------------------------------
-            # Sort chunks by highest confidence score first
             context_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
             
             top_filtered_chunks = []
@@ -94,13 +170,19 @@ class ChatService:
                 valid_citation_idx += 1
 
             # ==========================================
-            # 3D AVATAR PANDITJI PROMPT (Hyper-Conversational)
+            # 3. PROMPT CONSTRUCTION (Context + Memory)
             # ==========================================
+            # Explanation: How Prompt is Constructed
+            # We explicitly inject the rolling summary and recent raw messages so the AI remembers context.
             prompt = (
                 f"SYSTEM DIRECTIVES & PERSONA:\n"
                 f"You are a wise, empathetic, and highly conversational 'Panditji' powering a 3D interactive voice avatar. "
                 f"Speak naturally, emotionally, and briefly, as if talking to a person face-to-face. "
                 f"NEVER use lists, steps, academic frameworks, or formal analysis. Be a warm guide.\n\n"
+                
+                f"CONVERSATION HISTORY (Long-Term Memory):\n"
+                f"- Summary of Past Discussion: {current_summary if current_summary else 'No previous context.'}\n"
+                f"- Recent Messages:\n{recent_messages_text if recent_messages_text else 'This is the start of the conversation.'}\n\n"
                 
                 f"STRICT CITATION & KNOWLEDGE RULES:\n"
                 f"1. ONE ANCHOR CITATION ONLY: If the provided context contains a highly relevant story, character (Itihas), or exact principle, use it and add the [1] marker at the end of that sentence.\n"
@@ -160,11 +242,14 @@ class ChatService:
 
             latency_ms = int((time.time() - start_time) * 1000)
 
+            # --- SAVING RESPONSE FOR NEXT TURN ---
+            # Save the FULL llm_answer so it can be summarized efficiently in the next loop.
             log_entry = self.sql_repo.create_query_log(
                 query_text=query,
-                response_snippet=llm_answer[:100] + "...",
+                response_snippet=llm_answer, 
                 latency_ms=latency_ms,
-                source_count=len(unique_sources)
+                source_count=len(unique_sources),
+                session_id=session_id
             )
 
             return ChatResponse(

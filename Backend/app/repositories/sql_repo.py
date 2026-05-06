@@ -1,10 +1,8 @@
-# Backend\app\repositories\sql_repo.py
-
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict
-from app.models import DocumentModel, QueryLogModel, GraphEdgeModel, SystemSettingsModel
+from app.models import DocumentModel, QueryLogModel, GraphEdgeModel, SystemSettingsModel, ChatSessionModel
 from app.config import get_logger, get_config
-from app.security import encrypt_key # <-- IMPORT ADDED
+from app.security import encrypt_key 
 
 logger = get_logger(__name__)
 
@@ -15,35 +13,22 @@ class SQLRepository:
 
     def get_settings(self) -> SystemSettingsModel:
         settings = self.db.query(SystemSettingsModel).filter_by(id="default").first()
-        
         if not settings:
             settings = SystemSettingsModel(
-                id="default", 
-                api_provider=self.config.api_provider, 
-                embedding_model=self.config.embedding_model, 
-                llm_model=self.config.llm_model,
-                chunk_size=self.config.chunk_size, 
-                temperature=self.config.temperature, 
-                rag_type=self.config.rag_type,
-                openai_api_key=encrypt_key(self.config.openai_api_key) if self.config.openai_api_key else None,
-                gemini_api_key=encrypt_key(self.config.gemini_api_key) if self.config.gemini_api_key else None,
-                database_url=self.config.database_url
+                id="default", api_provider=self.config.api_provider, embedding_model=self.config.embedding_model, 
+                llm_model=self.config.llm_model, chunk_size=self.config.chunk_size, temperature=self.config.temperature, 
+                rag_type=self.config.rag_type, openai_api_key=encrypt_key(self.config.openai_api_key) if self.config.openai_api_key else None,
+                gemini_api_key=encrypt_key(self.config.gemini_api_key) if self.config.gemini_api_key else None, database_url=self.config.database_url
             )
             self.db.add(settings)
             self.db.commit()
             self.db.refresh(settings)
 
-        # Fallbacks
-        keys_to_check = [
-            "api_provider", "embedding_model", "llm_model", "chunk_size", 
-            "temperature", "rag_type", "database_url"
-        ]
-        
+        keys_to_check = ["api_provider", "embedding_model", "llm_model", "chunk_size", "temperature", "rag_type", "database_url"]
         for key in keys_to_check:
             if not getattr(settings, key):
                 setattr(settings, key, getattr(self.config, key))
 
-        # API Key fallbacks (must be encrypted in memory)
         if not settings.openai_api_key and self.config.openai_api_key:
             settings.openai_api_key = encrypt_key(self.config.openai_api_key)
         if not settings.gemini_api_key and self.config.gemini_api_key:
@@ -56,7 +41,6 @@ class SQLRepository:
         if not settings:
             settings = self.get_settings()
             
-        # --- FIX: ENCRYPT KEYS BEFORE SAVING ---
         if "openai_api_key" in payload and payload["openai_api_key"]:
             payload["openai_api_key"] = encrypt_key(payload["openai_api_key"])
         if "gemini_api_key" in payload and payload["gemini_api_key"]:
@@ -69,6 +53,30 @@ class SQLRepository:
         self.db.commit()
         self.db.refresh(settings)
         return settings
+
+    # --- MEMORY REPOSITORY FUNCTIONS ---
+    def get_or_create_chat_session(self, session_id: str) -> ChatSessionModel:
+        session = self.db.query(ChatSessionModel).filter(ChatSessionModel.id == session_id).first()
+        if not session:
+            session = ChatSessionModel(id=session_id)
+            self.db.add(session)
+            self.db.commit()
+            self.db.refresh(session)
+        return session
+
+    def get_unsummarized_logs(self, session_id: str) -> List[QueryLogModel]:
+        return self.db.query(QueryLogModel).filter(
+            QueryLogModel.session_id == session_id,
+            QueryLogModel.is_summarized == False
+        ).order_by(QueryLogModel.created_at.asc()).all()
+
+    def update_session_summary(self, session_id: str, new_summary: str, summarized_log_ids: List[str]):
+        session = self.get_or_create_chat_session(session_id)
+        session.summary = new_summary
+        # Mark processed logs as summarized so they aren't processed again
+        self.db.query(QueryLogModel).filter(QueryLogModel.id.in_(summarized_log_ids)).update({"is_summarized": True})
+        self.db.commit()
+    # -----------------------------------
 
     def create_document(self, name: str, file_type: str, size_mb: float) -> DocumentModel:
         db_doc = DocumentModel(name=name, file_type=file_type, size_mb=size_mb)
@@ -97,10 +105,11 @@ class SQLRepository:
             return True
         return False
 
-    def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, status: str = "Success") -> QueryLogModel:
+    def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, session_id: str = None, status: str = "Success") -> QueryLogModel:
         log = QueryLogModel(
             query_text=query_text, response_snippet=response_snippet,
-            latency_ms=latency_ms, source_count=source_count, status=status
+            latency_ms=latency_ms, source_count=source_count, 
+            session_id=session_id, status=status
         )
         self.db.add(log)
         self.db.commit()

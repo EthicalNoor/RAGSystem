@@ -1,5 +1,3 @@
-# Backend\app\routers\chat.py
-
 from fastapi import APIRouter, Depends, HTTPException
 from app.schemas import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
@@ -19,7 +17,8 @@ async def ask_question(
             raise HTTPException(status_code=400, detail="Query cannot be empty.")
             
         logger.info(f"Received chat query: {request.query[:50]}...")
-        response = await chat_svc.process_query(request.query)
+        # Pass session_id to maintain memory
+        response = await chat_svc.process_query(request.query, request.session_id)
         return response
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")

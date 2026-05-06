@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Float, DateTime, Text, ForeignKey
+from sqlalchemy import Column, String, Integer, Float, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
@@ -22,6 +22,14 @@ class SystemSettingsModel(Base):
     gemini_api_key = Column(String, nullable=True)
     database_url = Column(String, nullable=True)
 
+# --- NEW: Chat Session Model for Memory Summaries ---
+class ChatSessionModel(Base):
+    __tablename__ = "chat_sessions"
+    
+    id = Column(String, primary_key=True) # Uses session_id from frontend
+    summary = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class DocumentModel(Base):
     __tablename__ = "documents"
 
@@ -31,8 +39,6 @@ class DocumentModel(Base):
     size_mb = Column(Float, nullable=False)
     status = Column(String, default="Pending") 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Bidirectional relationships
     chunks = relationship("DocumentChunkModel", back_populates="document", cascade="all, delete-orphan")
     graph_edges = relationship("GraphEdgeModel", back_populates="document", cascade="all, delete-orphan")
 
@@ -41,15 +47,10 @@ class DocumentChunkModel(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
-    
-    # --- ADDED FOR CITATION MAPPING ---
     page_number = Column(Integer, nullable=True) 
-    
     text_content = Column(Text, nullable=False)
     embedding = Column(Vector(1536), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # --- RESTORED TO FIX SQLALCHEMY MAPPER ERROR ---
     document = relationship("DocumentModel", back_populates="chunks")
 
 class GraphEdgeModel(Base):
@@ -68,6 +69,11 @@ class QueryLogModel(Base):
     __tablename__ = "query_logs"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    
+    # --- ADDED FOR MEMORY TRACKING ---
+    session_id = Column(String, nullable=True) 
+    is_summarized = Column(Boolean, default=False)
+    
     query_text = Column(Text, nullable=False)
     response_snippet = Column(Text, nullable=False)
     latency_ms = Column(Integer, nullable=False)

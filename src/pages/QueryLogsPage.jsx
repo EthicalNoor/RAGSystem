@@ -136,6 +136,32 @@ export default function QueryLogsPage() {
     }
   };
 
+  // --- NEW: Handle opening PDF with auto-navigation & highlighting ---
+  const handleCitationClick = (cite) => {
+    const backendUrl = import.meta.env.VITE_API_BASE_URL 
+      ? import.meta.env.VITE_API_BASE_URL.replace('/api/v1', '') 
+      : 'http://localhost:8000';
+    
+    const fileUrl = `${backendUrl}/uploads/${cite.document}`;
+
+    // Clean up the text for searching (Chrome search works best with a clean string, no line breaks)
+    // We take the first 40 characters to guarantee a hit without breaking the URL parser
+    const cleanSearchText = cite.content
+      .replace(/[\n\r]/g, ' ')
+      .trim()
+      .substring(0, 40);
+
+    // OPTION 1.5 (Active): Native Chrome/Edge PDF Highlighting
+    // Uses native browser #page=X&search=Y fragment to jump & highlight in yellow
+    const targetUrl = `${fileUrl}#page=${cite.page}&search=${encodeURIComponent(cleanSearchText)}`;
+
+    // OPTION 2 (Commented out): Custom PDF.js Viewer
+    // If you build a custom pdf.js wrapper in your public folder, uncomment this:
+    // const targetUrl = `/pdf-viewer?file=${encodeURIComponent(fileUrl)}&page=${cite.page}&text=${encodeURIComponent(cite.content)}`;
+
+    window.open(targetUrl, '_blank');
+  };
+
   return (
     <div className="unified-chat-layout">
       {/* 1. Persistent Left Sidebar for Conversation History */}
@@ -171,7 +197,7 @@ export default function QueryLogsPage() {
         </div>
       </div>
 
-      {/* NEW: 2-Column Wrapper for Chat & Citations */}
+      {/* 2-Column Wrapper for Chat & Citations */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         
         {/* 2. Main Chat Area */}
@@ -283,15 +309,35 @@ export default function QueryLogsPage() {
               ) : (
                 activeCitations.map((cite) => (
                   <div key={cite.citation_idx} style={{ background: 'var(--bg-app)', border: '1px solid var(--border-medium)', borderRadius: '8px', padding: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span style={{ fontWeight: 'bold', color: 'var(--accent-primary)', fontSize: '0.9rem' }}>
-                        [{cite.citation_idx}] {cite.document}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                      
+                      {/* NEW: Clickable, interactive file name link */}
+                      <span 
+                        onClick={() => handleCitationClick(cite)}
+                        style={{ 
+                          fontWeight: 'bold', 
+                          color: 'var(--accent-primary)', 
+                          fontSize: '0.9rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          textUnderlineOffset: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                        title="Click to open original PDF and highlight text"
+                      >
+                        [{cite.citation_idx}] {cite.document} 
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
                       </span>
+
                       <span className="badge badge-info">Pg {cite.page}</span>
                     </div>
+                    
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                       Confidence Match: {(cite.score * 100).toFixed(1)}%
                     </div>
+                    
                     <p style={{ fontSize: '0.9rem', color: 'var(--text-main)', lineHeight: '1.6', background: 'var(--bg-panel)', padding: '12px', borderRadius: '4px', borderLeft: '3px solid var(--accent-primary)' }}>
                       "{cite.content}"
                     </p>

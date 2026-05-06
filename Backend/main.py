@@ -16,28 +16,40 @@ os.makedirs(config.upload_dir, exist_ok=True)
 
 try:
     with engine.connect() as conn:
-        # Ensure pgvector is installed
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         
         # --- SAFE MIGRATIONS ---
         
-        # 1. Safely add database_url to system_settings if missing
+        # 1. Safe Settings Migration
         try:
             conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS database_url VARCHAR"))
         except Exception as alter_err:
-            logger.warning(f"system_settings migration skipped or failed: {alter_err}")
+            pass
 
-        # 2. FIX: Safely add the new page_number column to document_chunks
+        # 2. Citation Schema Migration
         try:
-            logger.info("Checking for 'page_number' column in document_chunks...")
             conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page_number INTEGER"))
-            logger.info("Successfully ensured 'page_number' column exists.")
         except Exception as alter_err:
-            logger.warning(f"document_chunks migration skipped or failed: {alter_err}")
+            pass
+
+        # 3. FIX: New Chat Memory Migrations (Session & Summarization)
+        try:
+            logger.info("Checking for chat memory tables/columns...")
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id VARCHAR PRIMARY KEY,
+                    summary TEXT DEFAULT '',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
+            conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN DEFAULT FALSE"))
+            logger.info("Successfully ensured memory tables/columns exist.")
+        except Exception as alter_err:
+            logger.warning(f"Memory migration skipped or failed: {alter_err}")
             
         conn.commit()
         
-    # Create any entirely new tables
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables and pgvector extension initialized.")
 except Exception as e:

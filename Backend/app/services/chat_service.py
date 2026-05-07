@@ -117,8 +117,8 @@ class ChatService:
             
             top_filtered_chunks = []
             for c in context_chunks:
-                # ENHANCED THRESHOLD: 0.78 enforces strict relevance. Prevents "nearby but irrelevant" verse matching.
-                if c.get("score", 0) >= 0.78: 
+                # ENHANCED THRESHOLD: 0.68 enforces strict relevance. Prevents "nearby but irrelevant" verse matching.
+                if c.get("score", 0) >= 0.68: 
                     top_filtered_chunks.append(c)
                 # RUTHLESSLY limit to exactly 1 source maximum
                 if len(top_filtered_chunks) >= 1:

@@ -40,12 +40,8 @@ class ChatService:
             # ==========================================
             # 1. CONVERSATION MEMORY & RECURSIVE SUMMARIZATION
             # ==========================================
-            # Explanation: How Chat History is Stored
-            # All messages are saved in QueryLogModel with a shared session_id.
-            # A separate ChatSessionModel stores the rolling summary.
-            
-            MAX_HISTORY_CHARS = 3000   # Token limit threshold
-            KEEP_RECENT_MESSAGES = 2   # Keep last N turns unsummarized for exact context
+            MAX_HISTORY_CHARS = 3000   
+            KEEP_RECENT_MESSAGES = 2   
             
             current_summary = ""
             recent_messages_text = ""
@@ -61,13 +57,7 @@ class ChatService:
                     
                 total_len = len(current_summary) + len(unsummarized_text)
                 
-                # Explanation: How Summarization is Triggered
-                # Triggered only when the uncompressed history breaches the MAX_HISTORY_CHARS limit.
                 if total_len > MAX_HISTORY_CHARS and len(unsummarized_logs) > KEEP_RECENT_MESSAGES:
-                    
-                    # Explanation: How Recursive Summarization Works
-                    # We take the existing summary, append the older raw messages, and ask the LLM
-                    # to generate a single compressed block. The very recent messages are spared.
                     logs_to_summarize = unsummarized_logs[:-KEEP_RECENT_MESSAGES]
                     logs_to_keep = unsummarized_logs[-KEEP_RECENT_MESSAGES:]
                     
@@ -84,7 +74,6 @@ class ChatService:
                         "NEW UPDATED SUMMARY:"
                     )
                     
-                    # Trigger LLM for summarization
                     if settings.api_provider == "gemini":
                         summ_resp = gemini_client.models.generate_content(
                             model=settings.llm_model.replace("models/", "") if "gemini" in settings.llm_model else "gemini-2.5-pro", 
@@ -98,18 +87,15 @@ class ChatService:
                         )
                         new_summary = summ_resp.choices[0].message.content
                         
-                    # Save new summary and mark processed logs as summarized
                     log_ids_to_mark = [log.id for log in logs_to_summarize]
                     self.sql_repo.update_session_summary(session_id, new_summary, log_ids_to_mark)
                     
                     current_summary = new_summary
                     
-                    # Rebuild recent messages context block with what we spared
                     for log in logs_to_keep:
                         recent_messages_text += f"User: {log.query_text}\nAI: {log.response_snippet}\n\n"
                 else:
                     recent_messages_text = unsummarized_text
-
 
             # ==========================================
             # 2. RAG RETRIEVAL (Vector / Graph Search)
@@ -131,10 +117,10 @@ class ChatService:
             
             top_filtered_chunks = []
             for c in context_chunks:
-                # SWEET SPOT: 0.65 allows abstract philosophical matches, but still blocks complete garbage.
-                if c.get("score", 0) >= 0.65: 
+                # ENHANCED THRESHOLD: 0.78 enforces strict relevance. Prevents "nearby but irrelevant" verse matching.
+                if c.get("score", 0) >= 0.78: 
                     top_filtered_chunks.append(c)
-                # RUTHLESSLY limit to exactly 1 source maximum to prevent citation overload
+                # RUTHLESSLY limit to exactly 1 source maximum
                 if len(top_filtered_chunks) >= 1:
                     break
 
@@ -152,10 +138,9 @@ class ChatService:
                 
                 unique_sources.add(doc_name)
 
-                # Truncate content for the UI drastically so it's a small anchor, not a book page
-                ui_display_content = content[:200] + "..." if len(content) > 200 else content
+                # Truncated safely for UI 
+                ui_display_content = content[:300] + "..." if len(content) > 300 else content
 
-                # Format text for LLM injection
                 context_text += f"[{valid_citation_idx}] Document: {doc_name} (Page {page_num})\nContent: {content}\n\n"
                 
                 citations.append({
@@ -172,28 +157,27 @@ class ChatService:
             # ==========================================
             # 3. PROMPT CONSTRUCTION (Context + Memory)
             # ==========================================
-            # Explanation: How Prompt is Constructed
-            # We explicitly inject the rolling summary and recent raw messages so the AI remembers context.
             prompt = (
                 f"SYSTEM DIRECTIVES & PERSONA:\n"
-                f"You are a wise, empathetic, and highly conversational 'Panditji' powering a 3D interactive voice avatar. "
-                f"Speak naturally, emotionally, and briefly, as if talking to a person face-to-face. "
-                f"NEVER use lists, steps, academic frameworks, or formal analysis. Be a warm guide.\n\n"
+                f"You are a calm, grounded, and respectful elder/guide. Speak simply, warmly, and directly. "
+                f"AVOID repetitive or dramatic words like 'Beta', 'storm', 'sky', 'clouds', 'heart'. "
+                f"NEVER force a sermon or lecture. If the user asks a direct question or wants a one-word answer, provide EXACTLY that immediately.\n\n"
                 
                 f"CONVERSATION HISTORY (Long-Term Memory):\n"
-                f"- Summary of Past Discussion: {current_summary if current_summary else 'No previous context.'}\n"
-                f"- Recent Messages:\n{recent_messages_text if recent_messages_text else 'This is the start of the conversation.'}\n\n"
+                f"- Summary: {current_summary if current_summary else 'No previous context.'}\n"
+                f"- Recent Messages:\n{recent_messages_text if recent_messages_text else 'Start of conversation.'}\n\n"
                 
-                f"STRICT CITATION & KNOWLEDGE RULES:\n"
-                f"1. ONE ANCHOR CITATION ONLY: If the provided context contains a highly relevant story, character (Itihas), or exact principle, use it and add the [1] marker at the end of that sentence.\n"
-                f"2. DO NOT FORCE CITATIONS: If the context is generic or a weak match, DO NOT cite it. Rely on your base wisdom instead. Say 'Citation not found' internally by just not placing any [X] marker.\n"
-                f"3. SHORT & DIRECT: Deliver ONE core insight. Do not explain multiple viewpoints.\n\n"
+                f"STRICT CITATION & KNOWLEDGE RULES (RAG Grounding):\n"
+                f"1. VERIFY THEN ANSWER: If a context snippet is provided, base your factual/spiritual claim EXACTLY on it. Do NOT generate a random interpretation and append a citation later.\n"
+                f"2. CITE ACCURATELY: If you use a verse, story, or fact from the context, add the [1] marker AT THE END OF THE SPECIFIC SENTENCE that uses it.\n"
+                f"3. NO FORCED CITATIONS: Do NOT cite pure empathy, generic advice, or practical steps. If the context does not exactly support your point, DO NOT use the [1] marker. Rely on general wisdom instead.\n\n"
                 
                 f"CONVERSATIONAL STRUCTURE (CRITICAL):\n"
-                f"Your response MUST be maximum 3 to 4 sentences in total.\n"
-                f"- Part 1: Emotional Validation (Acknowledge their pain/dilemma warmly in one sentence).\n"
-                f"- Part 2: Core Insight (One brief piece of guidance or a short relevant story from the context, marked with [1] if used).\n"
-                f"- Part 3: Interactive Hook (End with a short, empathetic question to invite them to speak again, e.g., 'Tumhara man is baare mein kya kehta hai?').\n\n"
+                f"Your response must be structured naturally, without sounding formulaic:\n"
+                f"- Step 1: Empathy (One short, natural sentence normalizing their experience without over-explaining).\n"
+                f"- Step 2: Direct Answer (Give the specific answer they asked for. If synthesizing a retrieved scripture, do it here and add [1]).\n"
+                f"- Step 3: Practical Action (One small, grounded next step or perspective shift).\n"
+                f"- Step 4: NO UNNECESSARY QUESTIONS. DO NOT end with a question unless you genuinely lack the information needed to help them. NEVER ask generic questions like 'how does your heart feel' or loop the conversation endlessly.\n\n"
                 
                 f"TONE & LANGUAGE:\n"
                 f"Detect the user's language automatically (English, Hindi, Hinglish, Marathi) and respond in the SAME language seamlessly.\n\n"
@@ -201,7 +185,7 @@ class ChatService:
                 f"System Meta-Data: Documents uploaded: [{available_docs_str}].\n\n"
                 
                 f"CONTEXT DATA (Top 1 Most Relevant Extract Only):\n"
-                f"{context_text if context_text else 'No exact match found. Provide un-cited general wisdom.'}\n\n"
+                f"{context_text if context_text else 'No exact match found. Provide direct, grounded guidance without citations.'}\n\n"
                 
                 f"USER QUESTION / PROBLEM: {query}"
             )
@@ -242,8 +226,6 @@ class ChatService:
 
             latency_ms = int((time.time() - start_time) * 1000)
 
-            # --- SAVING RESPONSE FOR NEXT TURN ---
-            # Save the FULL llm_answer so it can be summarized efficiently in the next loop.
             log_entry = self.sql_repo.create_query_log(
                 query_text=query,
                 response_snippet=llm_answer, 

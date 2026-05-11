@@ -1,5 +1,5 @@
 // src/store.jsx
-import React, { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, createContext, useContext, useCallback, useMemo, useRef } from 'react';
 
 // --- API Service Configuration ---
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
@@ -63,6 +63,13 @@ export const AppProvider = ({ children }) => {
   const [logs, setLogs] = useState([]);
   const [health, setHealth] = useState(null);
   const [settings, setSettings] = useState(null);
+  
+  // --- FIX: REF GUARD FOR INITIAL FETCH ---
+  // This prevents React StrictMode from triggering duplicate API calls on mount.
+  const hasInitialized = useRef(false);
+
+  // --- FIX: TRACK PENDING COUNT TO PREVENT METRIC OVER-FETCHING ---
+  const prevPendingCount = useRef(0);
 
   const [conversations, setConversations] = useState(() => {
     try { 
@@ -78,20 +85,25 @@ export const AppProvider = ({ children }) => {
   const fetchHealth = useCallback(() => api.getVDBHealth().then(setHealth).catch(console.error), []);
   const fetchSettings = useCallback(() => api.getSettings().then(setSettings).catch(console.error), []);
 
+  // --- REPLACED: INITIAL FETCH WITH GUARD ---
   useEffect(() => {
-    fetchSettings();
-    fetchDocuments();
+    if (!hasInitialized.current) {
+      fetchSettings();
+      fetchDocuments();
+      hasInitialized.current = true;
+    }
   }, [fetchSettings, fetchDocuments]);
 
   useEffect(() => {
     localStorage.setItem('rag_conversations', JSON.stringify(conversations));
   }, [conversations]);
 
-  // --- SMART DYNAMIC POLLING FORMULA ADDED HERE ---
+  // --- UPDATED: SMART DYNAMIC POLLING WITH REFINED TRIGGER ---
   useEffect(() => {
     const pendingDocs = documents.filter(doc => doc.status === 'Pending' || doc.status === 'Processing');
+    const currentPendingCount = pendingDocs.length;
     
-    if (pendingDocs.length > 0) {
+    if (currentPendingCount > 0) {
       let totalPendingMB = 0;
       pendingDocs.forEach(doc => {
         const sizeVal = parseFloat(doc.size);
@@ -99,7 +111,6 @@ export const AppProvider = ({ children }) => {
       });
 
       let dynamicIntervalMs = Math.floor(5000 + (totalPendingMB * 1500));
-      
       if (dynamicIntervalMs > 45000) dynamicIntervalMs = 45000;
       if (dynamicIntervalMs < 5000) dynamicIntervalMs = 5000;
 
@@ -107,11 +118,14 @@ export const AppProvider = ({ children }) => {
         fetchDocuments(); 
       }, dynamicIntervalMs); 
       
+      prevPendingCount.current = currentPendingCount;
       return () => clearTimeout(timeoutId); 
       
-    } else if (documents.length > 0) {
+    } else if (prevPendingCount.current > 0 && currentPendingCount === 0) {
+      // A document JUST finished processing. Refresh stats exactly ONCE.
       fetchMetrics();
       fetchHealth();
+      prevPendingCount.current = 0;
     }
   }, [documents, fetchDocuments, fetchMetrics, fetchHealth]);
 

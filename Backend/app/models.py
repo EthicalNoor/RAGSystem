@@ -7,7 +7,15 @@ import uuid
 
 def generate_uuid():
     return str(uuid.uuid4())
-
+class UserModel(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True) # Google 'sub' id or Admin ID
+    email = Column(String, unique=True)
+    name = Column(String)
+    picture = Column(String, nullable=True)
+    role = Column(String, default="user") # <-- NEW: Role Tracking
+    password = Column(String, nullable=True) # <-- NEW: For Admin Auth
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 class SystemSettingsModel(Base):
     __tablename__ = "system_settings"
 
@@ -29,6 +37,7 @@ class ChatSessionModel(Base):
     id = Column(String, primary_key=True) # Uses session_id from frontend
     summary = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True) # <-- NEW
 
 class DocumentModel(Base):
     __tablename__ = "documents"
@@ -80,3 +89,4 @@ class QueryLogModel(Base):
     source_count = Column(Integer, default=0)
     status = Column(String, default="Success")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True) # <-- NEW

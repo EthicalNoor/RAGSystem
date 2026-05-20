@@ -1,11 +1,28 @@
 // src/store.jsx
 import React, { useState, useEffect, createContext, useContext, useCallback, useMemo, useRef } from 'react';
 
-// --- API Service Configuration ---
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+
+const authFetch = (endpoint, options = {}) => {
+  const token = localStorage.getItem('auth_token');
+  const headers = {
+    ...options.headers,
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+  };
+  return fetch(`${API_BASE}${endpoint}`, { ...options, headers }).then(handleResponse);
+};
 
 const handleResponse = async (response) => {
   if (!response.ok) {
+    if (response.status === 401) {
+      console.warn("Session expired or invalid token. Logging out...");
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('user_role');
+      localStorage.removeItem('user_id');
+      window.location.href = '/login'; 
+      return; 
+    }
+
     let errorMessage = `Error: ${response.status} ${response.statusText}`;
     try {
       const errorData = await response.json();
@@ -18,19 +35,21 @@ const handleResponse = async (response) => {
 };
 
 export const api = {
-  getDocs: () => fetch(`${API_BASE}/documents`).then(handleResponse),
-  uploadDocs: (formData, isFolder) => fetch(`${API_BASE}/documents/${isFolder ? 'upload-folder' : 'upload'}`, { method: 'POST', body: formData }).then(handleResponse),
-  deleteDoc: (id) => fetch(`${API_BASE}/documents/${id}`, { method: 'DELETE' }).then(handleResponse),
-  rerunDoc: (id) => fetch(`${API_BASE}/documents/${id}/rerun`, { method: 'POST' }).then(handleResponse),
-  getDashboard: () => fetch(`${API_BASE}/system/dashboard/metrics`).then(handleResponse),
-  getLogs: () => fetch(`${API_BASE}/system/logs/queries`).then(handleResponse),
-  clearLogs: () => fetch(`${API_BASE}/system/logs/queries`, { method: 'DELETE' }).then(handleResponse),
-  getVDBHealth: () => fetch(`${API_BASE}/system/vectordb/health`).then(handleResponse),
-  getSettings: () => fetch(`${API_BASE}/system/settings`).then(handleResponse),
-  updateSettings: (data) => fetch(`${API_BASE}/system/settings`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(handleResponse),
-  chat: (query, session_id) => fetch(`${API_BASE}/chat`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ query, session_id }) }).then(handleResponse),
-  getGraphData: () => fetch(`${API_BASE}/system/graphdb/data`).then(handleResponse),
-  getModels: () => fetch(`${API_BASE}/system/settings/models`).then(handleResponse)
+  login: (token) => fetch(`${API_BASE}/auth/google`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ token }) }).then(handleResponse),
+  adminLogin: (username, password) => fetch(`${API_BASE}/auth/admin`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ username, password }) }).then(handleResponse),
+  getDocs: () => authFetch(`/documents`),
+  uploadDocs: (formData, isFolder) => authFetch(`/documents/${isFolder ? 'upload-folder' : 'upload'}`, { method: 'POST', body: formData }),
+  deleteDoc: (id) => authFetch(`/documents/${id}`, { method: 'DELETE' }),
+  rerunDoc: (id) => authFetch(`/documents/${id}/rerun`, { method: 'POST' }),
+  getDashboard: () => authFetch(`/system/dashboard/metrics`),
+  getLogs: () => authFetch(`/system/logs/queries`),
+  clearLogs: () => authFetch(`/system/logs/queries`, { method: 'DELETE' }),
+  getVDBHealth: () => authFetch(`/system/vectordb/health`),
+  getSettings: () => authFetch(`/system/settings`),
+  updateSettings: (data) => authFetch(`/system/settings`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+  chat: (query, session_id) => authFetch(`/chat`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ query, session_id }) }),
+  getGraphData: () => authFetch(`/system/graphdb/data`),
+  getModels: () => authFetch(`/system/settings/models`)
 };
 
 export const Icons = {
@@ -51,7 +70,8 @@ export const Icons = {
   Plus: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>,
   Network: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>,
   Volume2: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>,
-  VolumeX: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+  VolumeX: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>,
+  Lock: () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
 };
 
 export const AppContext = createContext();
@@ -64,17 +84,13 @@ export const AppProvider = ({ children }) => {
   const [health, setHealth] = useState(null);
   const [settings, setSettings] = useState(null);
   
-  // --- FIX: REF GUARD FOR INITIAL FETCH ---
-  // This prevents React StrictMode from triggering duplicate API calls on mount.
   const hasInitialized = useRef(false);
-
-  // --- FIX: TRACK PENDING COUNT TO PREVENT METRIC OVER-FETCHING ---
   const prevPendingCount = useRef(0);
 
   const [conversations, setConversations] = useState(() => {
     try { 
-      const parsed = JSON.parse(localStorage.getItem('rag_conversations'));
-      return Array.isArray(parsed) ? parsed : [];
+      const userId = localStorage.getItem('user_id') || 'default';
+      const parsed = JSON.parse(localStorage.getItem(`rag_conversations_${userId}`));
     } catch { return []; }
   });
   const [activeChatId, setActiveChatId] = useState(null);
@@ -85,20 +101,22 @@ export const AppProvider = ({ children }) => {
   const fetchHealth = useCallback(() => api.getVDBHealth().then(setHealth).catch(console.error), []);
   const fetchSettings = useCallback(() => api.getSettings().then(setSettings).catch(console.error), []);
 
-  // --- REPLACED: INITIAL FETCH WITH GUARD ---
   useEffect(() => {
     if (!hasInitialized.current) {
-      fetchSettings();
+      // Only fetch settings if Admin
+      const role = localStorage.getItem('user_role');
+      if (role === 'admin') fetchSettings();
+      
       fetchDocuments();
       hasInitialized.current = true;
     }
   }, [fetchSettings, fetchDocuments]);
 
-  useEffect(() => {
-    localStorage.setItem('rag_conversations', JSON.stringify(conversations));
+useEffect(() => {
+    const userId = localStorage.getItem('user_id') || 'default';
+    localStorage.setItem(`rag_conversations_${userId}`, JSON.stringify(conversations));
   }, [conversations]);
 
-  // --- UPDATED: SMART DYNAMIC POLLING WITH REFINED TRIGGER ---
   useEffect(() => {
     const pendingDocs = documents.filter(doc => doc.status === 'Pending' || doc.status === 'Processing');
     const currentPendingCount = pendingDocs.length;
@@ -122,7 +140,6 @@ export const AppProvider = ({ children }) => {
       return () => clearTimeout(timeoutId); 
       
     } else if (prevPendingCount.current > 0 && currentPendingCount === 0) {
-      // A document JUST finished processing. Refresh stats exactly ONCE.
       fetchMetrics();
       fetchHealth();
       prevPendingCount.current = 0;

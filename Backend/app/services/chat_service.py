@@ -21,7 +21,7 @@ class ChatService:
         self.rag_svc = rag_svc
         self.sql_repo = sql_repo
 
-    async def process_query(self, query: str, session_id: str = None) -> ChatResponse:
+    async def process_query(self, query: str, session_id: str = None, user_id: str = None) -> ChatResponse:
         start_time = time.time()
         
         try:
@@ -47,10 +47,9 @@ class ChatService:
             recent_messages_text = ""
             
             if session_id:
-                session = self.sql_repo.get_or_create_chat_session(session_id)
+                session = self.sql_repo.get_or_create_chat_session(session_id, user_id)        
                 current_summary = session.summary or ""
-                unsummarized_logs = self.sql_repo.get_unsummarized_logs(session_id)
-                
+                unsummarized_logs = self.sql_repo.get_unsummarized_logs(session_id, user_id)                
                 unsummarized_text = ""
                 for log in unsummarized_logs:
                     unsummarized_text += f"User: {log.query_text}\nAI: {log.response_snippet}\n\n"
@@ -324,7 +323,8 @@ class ChatService:
                 response_snippet=llm_answer, 
                 latency_ms=latency_ms,
                 source_count=len(unique_sources),
-                session_id=session_id
+                session_id=session_id,
+                user_id=user_id
             )
 
             return ChatResponse(

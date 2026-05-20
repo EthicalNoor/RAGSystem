@@ -6,7 +6,7 @@ from app.schemas import (
 )
 from app.repositories.sql_repo import SQLRepository
 from app.repositories.vector_repo import VectorRepository
-from app.dependencies import get_sql_repo, get_vector_repo
+from app.dependencies import get_sql_repo, get_vector_repo, get_current_user
 from app.config import get_logger
 from datetime import datetime
 
@@ -35,8 +35,11 @@ async def get_dashboard_metrics(
     )
 
 @router.get("/logs/queries", response_model=List[QueryLogResponse])
-async def get_query_logs(sql_repo: SQLRepository = Depends(get_sql_repo)):
-    return sql_repo.get_query_logs(limit=50)
+async def get_query_logs(
+    sql_repo: SQLRepository = Depends(get_sql_repo),
+    user_id: str = Depends(get_current_user) # <-- Inject the user ID here
+):
+    return sql_repo.get_query_logs(limit=50, user_id=user_id)
 
 @router.delete("/logs/queries")
 async def clear_query_logs(sql_repo: SQLRepository = Depends(get_sql_repo)):

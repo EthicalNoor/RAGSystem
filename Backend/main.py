@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.config import get_logger, get_config
-from app.routers import chat, documents, logs
+from app.routers import chat, documents, logs, auth
 from app.database import engine, Base
 
 logger = get_logger(__name__)
@@ -18,23 +18,15 @@ try:
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         
-        # --- SAFE MIGRATIONS ---
-        
-        # 1. Safe Settings Migration
         try:
             conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS database_url VARCHAR"))
-        except Exception as alter_err:
-            pass
+        except Exception: pass
 
-        # 2. Citation Schema Migration
         try:
             conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page_number INTEGER"))
-        except Exception as alter_err:
-            pass
+        except Exception: pass
 
-        # 3. FIX: New Chat Memory Migrations (Session & Summarization)
         try:
-            logger.info("Checking for chat memory tables/columns...")
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id VARCHAR PRIMARY KEY,
@@ -44,9 +36,37 @@ try:
             """))
             conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
             conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN DEFAULT FALSE"))
-            logger.info("Successfully ensured memory tables/columns exist.")
-        except Exception as alter_err:
-            logger.warning(f"Memory migration skipped or failed: {alter_err}")
+        except Exception: pass
+
+        try:
+            logger.info("Running User & Auth Migrations...")
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id VARCHAR PRIMARY KEY,
+                    email VARCHAR UNIQUE,
+                    name VARCHAR,
+                    picture VARCHAR,
+                    role VARCHAR DEFAULT 'user',
+                    password VARCHAR,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            # Ensure new columns exist for older DBs
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR DEFAULT 'user'"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password VARCHAR"))
+
+            conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS user_id VARCHAR REFERENCES users(id) ON DELETE CASCADE"))
+            conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS user_id VARCHAR REFERENCES users(id) ON DELETE CASCADE"))
+            
+            # --- SEED DEFAULT ADMIN USER ---
+            conn.execute(text("""
+                INSERT INTO users (id, email, name, role, password) 
+                VALUES ('admin_sys_001', 'admin', 'System Administrator', 'admin', 'admin123')
+                ON CONFLICT (email) DO NOTHING
+            """))
+            
+        except Exception as e:
+            logger.warning(f"Auth migration skipped or failed: {e}")
             
         conn.commit()
         
@@ -82,6 +102,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 app.include_router(logs.router, prefix="/api/v1/system", tags=["System & Logs"])
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
 
 @app.get("/health", tags=["Health"])
 async def health_check():

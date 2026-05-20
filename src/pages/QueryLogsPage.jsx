@@ -5,9 +5,9 @@ import { api, Icons, useApp } from '../store';
 import '../styles/QueryLogsPage.css';
 
 export default function QueryLogsPage() {
-  const { 
-    documents, 
-    conversations, setConversations, 
+const { 
+    documents = [], 
+    conversations = [], setConversations, 
     activeChatId, setActiveChatId,
     fetchLogs, fetchMetrics 
   } = useApp();
@@ -19,10 +19,9 @@ export default function QueryLogsPage() {
   const messagesEndRef = useRef(null);
 
   const hasDocuments = documents.length > 0;
-  const activeChat = conversations.find(c => c.id === activeChatId) || null;
-  
-  // Isolate citations for the currently clicked AI message
-  const activeMessage = activeChat?.messages.find(m => m.id === activeMessageId);
+
+  const activeChat = (conversations || []).find(c => c.id === activeChatId) || null;
+  const activeMessage = activeChat?.messages?.find(m => m.id === activeMessageId);
   const activeCitations = activeMessage?.citations || [];
 
   // Auto-scroll to bottom of messages
@@ -88,7 +87,7 @@ export default function QueryLogsPage() {
         createdAt: Date.now(),
         messages: [userMsg]
       };
-      setConversations(prev => [newChat, ...prev]);
+      setConversations(prev => [newChat, ...(prev || [])]);
       setActiveChatId(currentChatId);
     } else {
       setConversations(prev => prev.map(c => 

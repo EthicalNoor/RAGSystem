@@ -54,19 +54,19 @@ class SQLRepository:
         self.db.refresh(settings)
         return settings
 
-    # --- MEMORY REPOSITORY FUNCTIONS ---
-    def get_or_create_chat_session(self, session_id: str) -> ChatSessionModel:
-        session = self.db.query(ChatSessionModel).filter(ChatSessionModel.id == session_id).first()
+    def get_or_create_chat_session(self, session_id: str, user_id: str) -> ChatSessionModel:
+        session = self.db.query(ChatSessionModel).filter_by(id=session_id, user_id=user_id).first()
         if not session:
-            session = ChatSessionModel(id=session_id)
+            session = ChatSessionModel(id=session_id, user_id=user_id)
             self.db.add(session)
             self.db.commit()
             self.db.refresh(session)
         return session
 
-    def get_unsummarized_logs(self, session_id: str) -> List[QueryLogModel]:
+    def get_unsummarized_logs(self, session_id: str, user_id: str) -> List[QueryLogModel]:
         return self.db.query(QueryLogModel).filter(
             QueryLogModel.session_id == session_id,
+            QueryLogModel.user_id == user_id,
             QueryLogModel.is_summarized == False
         ).order_by(QueryLogModel.created_at.asc()).all()
 
@@ -105,19 +105,22 @@ class SQLRepository:
             return True
         return False
 
-    def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, session_id: str = None, status: str = "Success") -> QueryLogModel:
+    def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, session_id: str = None, status: str = "Success", user_id: str = None) -> QueryLogModel:
         log = QueryLogModel(
             query_text=query_text, response_snippet=response_snippet,
             latency_ms=latency_ms, source_count=source_count, 
-            session_id=session_id, status=status
+            session_id=session_id, status=status, user_id=user_id
         )
         self.db.add(log)
         self.db.commit()
         self.db.refresh(log)
         return log
 
-    def get_query_logs(self, limit: int = 100) -> List[QueryLogModel]:
-        return self.db.query(QueryLogModel).order_by(QueryLogModel.created_at.desc()).limit(limit).all()
+    def get_query_logs(self, limit: int = 100, user_id: str = None) -> List[QueryLogModel]:
+        query = self.db.query(QueryLogModel)
+        if user_id:
+            query = query.filter(QueryLogModel.user_id == user_id)
+        return query.order_by(QueryLogModel.created_at.desc()).limit(limit).all()
     
     def delete_all_query_logs(self) -> bool:
         try:

@@ -1,16 +1,29 @@
 # RAG Control Center - Comprehensive API Documentation
 
-This document outlines the complete RESTful API architecture for the Dual-RAG backend. The backend is built using FastAPI and serves endpoints across four primary domains: **Health**, **Chat**, **Documents**, and **System & Logs**. 
+This document outlines the complete RESTful API architecture for the Dual-RAG backend. The backend is built using FastAPI and serves endpoints across five primary domains: **Auth**, **Users**, **Chat**, **Documents**, and **System & Logs**. 
 
 All API routes (except the root health check) are prefixed with `/api/v1`.
 
 ---
 
+## Authentication & Roles
+
+The system uses Role-Based Access Control (RBAC). 
+* **Standard Users:** Authenticate via Google OAuth. Tokens are standard JWTs passed in the `Authorization` header as a Bearer token.
+* **Admin Users:** Authenticate via local credentials. The system generates a custom token (e.g., `admin-secret-token-<id>`) to bypass Google JWT validation for administrative actions.
+
+**Header Format for Protected Routes:**
+`Authorization: Bearer <Token>`
+
+---
+
 ## Table of Contents
 1. [General Health](#1-general-health)
-2. [Chat API](#2-chat-api)
-3. [Document Management API](#3-document-management-api)
-4. [System & Logs API](#4-system--logs-api)
+2. [Authentication API](#2-authentication-api)
+3. [User Management API](#3-user-management-api)
+4. [Chat & Memory API](#4-chat--memory-api)
+5. [Document Management API](#5-document-management-api)
+6. [System, Analytics & Settings API](#6-system--settings-api)
 
 ---
 
@@ -19,293 +32,317 @@ All API routes (except the root health check) are prefixed with `/api/v1`.
 ### 1.1 Server Health Check
 Checks if the core FastAPI server and Database are connected and running.
 
-*   **Endpoint:** `/health`
-*   **Method:** `GET`
-*   **Response:** `200 OK`
+* **Endpoint:** `/health`
+* **Method:** `GET`
+* **Auth Required:** No
 
 **Response Example:**
+
+```
+
+```text
+Generated API-ReadME.md
+
 ```json
 {
   "status": "healthy",
   "environment": "production",
   "database": "connected"
 }
+
 ```
 
 ---
 
-## 2. Chat API
+## 2. Authentication API
 
-### 2.1 Ask a Question (RAG Retrieval)
-Processes a user query, performs semantic or graph-based retrieval against ingested documents, and returns an AI-generated answer based on the retrieved context.
+### 2.1 Admin Login
 
-*   **Endpoint:** `/api/v1/chat`
-*   **Method:** `POST`
-*   **Headers:** `Content-Type: application/json`
+Authenticates an administrator using local database credentials.
+
+* **Endpoint:** `/api/v1/auth/admin`
+* **Method:** `POST`
+* **Auth Required:** No
+
+**Request Body (`AdminLoginRequest`):**
+
+```json
+{
+  "username": "admin",
+  "password": "admin123"
+}
+
+```
+
+**Response (`200 OK`):**
+
+```json
+{
+  "status": "success",
+  "token": "admin-secret-token-admin_sys_001",
+  "user": {
+    "id": "admin_sys_001",
+    "name": "System Administrator",
+    "role": "admin"
+  }
+}
+
+```
+
+### 2.2 Google OAuth Login
+
+Validates a Google JWT, automatically creating a new `user` record in the database if they don't exist.
+
+* **Endpoint:** `/api/v1/auth/google`
+* **Method:** `POST`
+* **Auth Required:** No
+
+**Request Body:**
+
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIs..."
+}
+
+```
+
+**Response (`200 OK`):**
+
+```json
+{
+  "status": "success",
+  "user": {
+    "id": "104928374...",
+    "name": "John Doe",
+    "email": "johndoe@gmail.com",
+    "role": "user"
+  }
+}
+
+```
+
+---
+
+## 3. User Management API
+
+### 3.1 Get Current User Profile
+
+Retrieves the profile of the currently authenticated user based on the Bearer token.
+
+* **Endpoint:** `/api/v1/users/me`
+* **Method:** `GET`
+* **Auth Required:** Yes (User/Admin)
+
+**Response (`UserResponse`):**
+
+```json
+{
+  "id": "104928374...",
+  "email": "johndoe@gmail.com",
+  "name": "John Doe",
+  "picture": "[https://lh3.googleusercontent.com/a/](https://lh3.googleusercontent.com/a/)...",
+  "role": "user"
+}
+
+```
+
+---
+
+## 4. Chat & Memory API
+
+### 4.1 Ask a Question (RAG Retrieval)
+
+Processes a user query and returns an AI-generated answer. Automatically associates the query with the logged-in user and the provided `session_id`.
+
+* **Endpoint:** `/api/v1/chat`
+* **Method:** `POST`
+* **Auth Required:** Yes (User/Admin)
 
 **Request Body (`ChatRequest`):**
+
 ```json
 {
-  "query": "What is the core message of the Bhagavad Gita regarding action?"
+  "query": "What are the new HR policies?",
+  "session_id": "1714523912000"
 }
+
 ```
 
-**Response (`200 OK` - `ChatResponse`):**
+**Response (`ChatResponse`):**
+
 ```json
 {
-  "response": "Priya Atman, The core message regarding action in the Bhagavad Gita is Nishkama Karma—performing your prescribed duties without attachment to the results... Om Shanti.",
-  "sources": [
-    "Bhagavad-gita-As-It-Is.pdf",
-    "Mahabharata-VOL-6.pdf"
+  "response": "Based on the internal guidelines, the new HR policies state...",
+  "sources": ["employee_handbook.pdf"],
+  "citations": [
+    {
+      "citation_idx": 1,
+      "id": "chunk-uuid-1234",
+      "document": "employee_handbook.pdf",
+      "page": 12,
+      "content": "The new PTO policy grants 20 days...",
+      "score": 0.892
+    }
   ],
-  "latency_ms": 3450,
-  "query_id": "c1f7a2d9-1234-4b56-8a90-3f4g5h6j7k8l",
+  "message_id": "msg-uuid-5678",
+  "latency_ms": 2340,
+  "query_id": "log-uuid-9012",
   "status": "Success"
 }
+
 ```
 
-**Error Responses:**
-*   `400 Bad Request`: If the query is empty.
-*   `500 Internal Server Error`: If the LLM provider fails or database retrieval errors out.
+### 4.2 Submit AI Response Feedback
+
+Allows a user to rate an AI's response (thumbs up/down) and provide optional written feedback.
+
+* **Endpoint:** `/api/v1/chat/messages/{message_id}/feedback`
+* **Method:** `POST`
+* **Auth Required:** Yes (User/Admin)
+
+**Request Body (`FeedbackRequest`):**
+
+```json
+{
+  "score": 1, 
+  "text": "Very accurate and helpful."
+}
+
+```
+
+### 4.3 List Chat Sessions
+
+Retrieves all historical chat session summaries for the active user.
+
+* **Endpoint:** `/api/v1/chat/sessions`
+* **Method:** `GET`
+* **Auth Required:** Yes (User/Admin)
+
+### 4.4 Delete Specific Chat Session
+
+Deletes a specific chat thread and its associated queries for the active user.
+
+* **Endpoint:** `/api/v1/chat/sessions/{session_id}`
+* **Method:** `DELETE`
+* **Auth Required:** Yes (User/Admin)
+
+### 4.5 Clear Personal Chat History
+
+Wipes all chat sessions and queries associated with the active user.
+
+* **Endpoint:** `/api/v1/chat/history`
+* **Method:** `DELETE`
+* **Auth Required:** Yes (User/Admin)
 
 ---
 
-## 3. Document Management API
+## 5. Document Management API
 
-### 3.1 Upload Documents
-Uploads one or multiple files, saves them to disk, logs them to the database, and initiates background parsing and vector embedding.
+### 5.1 Upload Documents
 
-*   **Endpoint:** `/api/v1/documents/upload`
-*   **Method:** `POST`
-*   **Headers:** `Content-Type: multipart/form-data`
+Ingests single or multiple documents. Performs text extraction, chunking, and kicks off background vectorization/graph extraction.
 
-**Request Parameters:**
-*   `files`: Array of `UploadFile` (Supports: PDF, DOCX, TXT, CSV).
+* **Endpoint:** `/api/v1/documents/upload`
+* **Method:** `POST` (Multipart Form)
+* **Auth Required:** Yes (Admin)
+* **Body:** `files` (Array of UploadFile)
 
-**Response (`200 OK` - `List[DocumentResponse]`):**
-```json
-[
-  {
-    "id": "a1b2c3d4-...",
-    "name": "Bhagavad-gita-As-It-Is.pdf",
-    "type": "PDF",
-    "size": "15.40 MB",
-    "status": "Pending"
-  }
-]
-```
-*(Note: Status is initially `Pending`. The background task will update this to `Indexed` or `Failed`.)*
+### 5.2 Get All Documents
 
-### 3.2 Upload Folder
-Identical behavior to the standard upload but explicitly targeted from the frontend folder selection.
+Retrieves the ingestion status and metadata of all documents in the system.
 
-*   **Endpoint:** `/api/v1/documents/upload-folder`
-*   **Method:** `POST`
-*   **Headers:** `Content-Type: multipart/form-data`
-*   **Request/Response:** Same as `3.1 Upload Documents`.
+* **Endpoint:** `/api/v1/documents`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
 
-### 3.3 List All Documents
-Fetches the metadata of all uploaded documents in the system, sorted by newest first.
+### 5.3 Get Document Details
 
-*   **Endpoint:** `/api/v1/documents`
-*   **Method:** `GET`
+Gets extensive metadata for a specific document, including chunk count and generated graph edges.
 
-**Response (`200 OK` - `List[DocumentResponse]`):**
-```json
-[
-  {
-    "id": "a1b2c3d4-...",
-    "name": "Mahabharata-VOL-1.pdf",
-    "type": "PDF",
-    "size": "22.10 MB",
-    "status": "Indexed"
-  }
-]
-```
+* **Endpoint:** `/api/v1/documents/{document_id}`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
 
-### 3.4 Delete Document
-Permanently deletes a document from the disk, and cascades deletion through the database (removing all associated Vector Chunks and Graph Edges).
+### 5.4 Reindex Document
 
-*   **Endpoint:** `/api/v1/documents/{document_id}`
-*   **Method:** `DELETE`
+Clears old chunks/edges and re-runs the embedding pipeline for a specific document.
 
-**Response (`200 OK`):**
-```json
-{
-  "status": "success",
-  "message": "Document deleted."
-}
-```
+* **Endpoint:** `/api/v1/documents/{document_id}/reindex`
+* **Method:** `POST`
+* **Auth Required:** Yes (Admin)
+
+### 5.5 Delete Document
+
+Permanently removes a document from storage and cascades deletion to all vector chunks and graph edges.
+
+* **Endpoint:** `/api/v1/documents/{document_id}`
+* **Method:** `DELETE`
+* **Auth Required:** Yes (Admin)
 
 ---
 
-## 4. System & Logs API
+## 6. System & Settings API
 
-### 4.1 Dashboard Metrics
-Aggregates high-level metrics required for the frontend Dashboard view.
+### 6.1 Get Dashboard Metrics
 
-*   **Endpoint:** `/api/v1/system/dashboard/metrics`
-*   **Method:** `GET`
+Provides high-level system analytics (total documents, storage used, query count, recent activity).
 
-**Response (`200 OK` - `DashboardMetricsResponse`):**
-```json
-{
-  "total_documents": 24,
-  "total_chunks": 14502,
-  "storage_used_mb": 92.05,
-  "total_queries": 156,
-  "recent_activity": [
-    {
-      "action": "System Boot",
-      "time": "Just now"
-    }
-  ]
-}
-```
+* **Endpoint:** `/api/v1/system/dashboard/metrics`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
 
-### 4.2 Get Query Logs
-Retrieves the history of user queries and AI responses (limited to the 50 most recent queries).
+### 6.2 Get Vector DB Health
 
-*   **Endpoint:** `/api/v1/system/logs/queries`
-*   **Method:** `GET`
+Returns PostgreSQL `pgvector` indexing status, total vector count, and estimated storage capacity.
 
-**Response (`200 OK` - `List[QueryLogResponse]`):**
-```json
-[
-  {
-    "id": "c1f7a2d9-...",
-    "query_text": "How to control anger?",
-    "response_snippet": "Priya Mitra, Anger is described in Chapter 2 of...",
-    "latency_ms": 2840,
-    "source_count": 2,
-    "status": "Success",
-    "created_at": "2026-04-30T15:20:11.000Z"
-  }
-]
-```
+* **Endpoint:** `/api/v1/system/vectordb/health`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
 
-### 4.3 Clear Query Logs
-Wipes all history from the `query_logs` table.
+### 6.3 Get System Settings
 
-*   **Endpoint:** `/api/v1/system/logs/queries`
-*   **Method:** `DELETE`
+Retrieves active RAG configuration. **Sensitive API keys are masked dynamically by the server before transmission.**
 
-**Response (`200 OK`):**
-```json
-{
-  "status": "success",
-  "message": "All query logs deleted"
-}
-```
+* **Endpoint:** `/api/v1/system/settings`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
 
-### 4.4 Vector Database Health
-Pings the pgvector extension and calculates active embeddings and storage allocation.
+### 6.4 Update System Settings
 
-*   **Endpoint:** `/api/v1/system/vectordb/health`
-*   **Method:** `GET`
+Updates the active configuration. Incoming API keys are encrypted at rest using Fernet encryption.
 
-**Response (`200 OK` - `VectorDBHealthResponse`):**
-```json
-{
-  "status": "Healthy",
-  "total_embeddings": 14502,
-  "storage_used_mb": 92.05,
-  "last_updated": "2026-04-30T15:21:00.000Z"
-}
-```
-
-### 4.5 Knowledge Graph Data
-Retrieves the entire node and edge mapping (Knowledge Triplets) extracted from the Graph RAG process for 2D visualization.
-
-*   **Endpoint:** `/api/v1/system/graphdb/data`
-*   **Method:** `GET`
-
-**Response (`200 OK`):**
-```json
-{
-  "total_nodes": 120,
-  "total_edges": 85,
-  "nodes": [
-    {"id": "Arjuna"},
-    {"id": "Lord Krishna"}
-  ],
-  "links": [
-    {
-      "source": "Lord Krishna",
-      "target": "Arjuna",
-      "relation": "guides"
-    }
-  ]
-}
-```
-
-### 4.6 Get System Settings
-Fetches the current configuration. API keys are strictly masked before being sent to the client.
-
-*   **Endpoint:** `/api/v1/system/settings`
-*   **Method:** `GET`
-
-**Response (`200 OK` - `SettingsPayload`):**
-```json
-{
-  "api_provider": "gemini",
-  "embedding_model": "text-embedding-004",
-  "llm_model": "gemini-2.5-pro",
-  "chunk_size": 800,
-  "temperature": 0.2,
-  "top_k": 5,
-  "rag_type": "standard",
-  "database_url": "postgresql://user:pass@localhost:5432/rag_db",
-  "openai_api_key": "••••••••••••••••••••••••••••••••",
-  "gemini_api_key": "••••••••••••••••••••••••••••••••"
-}
-```
-
-### 4.7 Update System Settings
-Updates the active configuration in the database. Incoming API keys are encrypted at rest using Fernet encryption.
-
-*   **Endpoint:** `/api/v1/system/settings`
-*   **Method:** `PUT`
-*   **Headers:** `Content-Type: application/json`
+* **Endpoint:** `/api/v1/system/settings`
+* **Method:** `PUT`
+* **Auth Required:** Yes (Admin)
 
 **Request Body (`SettingsPayload`):**
-*(Note: If API keys are passed as the masked bullet string `••••...`, the backend ignores them to prevent overwriting keys with bullet points).*
+
 ```json
 {
-  "api_provider": "gemini",
-  "embedding_model": "text-embedding-004",
-  "llm_model": "gemini-2.5-pro",
-  "chunk_size": 800,
-  "temperature": 0.3,
-  "top_k": 7,
-  "rag_type": "graph"
+  "api_provider": "openai",
+  "embedding_model": "text-embedding-3-large",
+  "llm_model": "gpt-4o",
+  "chunk_size": 1024,
+  "temperature": 0.2,
+  "rag_type": "standard",
+  "database_url": "postgresql://user:pass@localhost/db"
 }
+
 ```
 
-**Response (`200 OK`):**
-```json
-{
-  "status": "success",
-  "message": "Settings securely saved to database."
-}
-```
+### 6.5 Get Dynamic Models
 
-### 4.8 Get Dynamic Available Models
-Pings the OpenAI and Google Gemini APIs directly (using the decrypted keys stored in the database) to fetch the latest available LLM and Embedding models dynamically.
+Queries OpenAI and Google APIs directly to fetch currently available models based on valid, decrypted API keys.
 
-*   **Endpoint:** `/api/v1/system/settings/models`
-*   **Method:** `GET`
+* **Endpoint:** `/api/v1/system/settings/models`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
 
-**Response (`200 OK`):**
-```json
-{
-  "openai": {
-    "llm": ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
-    "embedding": ["text-embedding-3-large", "text-embedding-3-small"]
-  },
-  "gemini": {
-    "llm": ["gemini-2.5-pro", "gemini-1.5-flash"],
-    "embedding": ["text-embedding-004", "embedding-001"]
-  }
-}
-```
+### 6.6 Get Knowledge Graph Data
+
+Extracts node and edge topology from the relational database specifically formatted for `react-force-graph-2d`.
+
+* **Endpoint:** `/api/v1/system/graphdb/data`
+* **Method:** `GET`
+* **Auth Required:** Yes (Admin)
+"""

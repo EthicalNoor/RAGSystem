@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict
-from app.models import DocumentModel, QueryLogModel, GraphEdgeModel, SystemSettingsModel, ChatSessionModel
+from app.models import DocumentModel, QueryLogModel, GraphEdgeModel, SystemSettingsModel, ChatSessionModel, UserModel, DocumentChunkModel
 from app.config import get_logger, get_config
 from app.security import encrypt_key 
 
@@ -54,6 +54,9 @@ class SQLRepository:
         self.db.refresh(settings)
         return settings
 
+    def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
+        return self.db.query(UserModel).filter(UserModel.id == user_id).first()
+
     def get_or_create_chat_session(self, session_id: str, user_id: str) -> ChatSessionModel:
         session = self.db.query(ChatSessionModel).filter_by(id=session_id, user_id=user_id).first()
         if not session:
@@ -63,20 +66,68 @@ class SQLRepository:
             self.db.refresh(session)
         return session
 
+    def get_chat_sessions(self, user_id: str) -> List[ChatSessionModel]:
+        return self.db.query(ChatSessionModel).filter(ChatSessionModel.user_id == user_id).order_by(ChatSessionModel.created_at.desc()).all()
+
+    def get_session_history(self, session_id: str, user_id: str) -> List[QueryLogModel]:
+        return self.db.query(QueryLogModel).filter(
+            QueryLogModel.session_id == session_id, QueryLogModel.user_id == user_id
+        ).order_by(QueryLogModel.created_at.asc()).all()
+
     def get_unsummarized_logs(self, session_id: str, user_id: str) -> List[QueryLogModel]:
         return self.db.query(QueryLogModel).filter(
-            QueryLogModel.session_id == session_id,
-            QueryLogModel.user_id == user_id,
-            QueryLogModel.is_summarized == False
+            QueryLogModel.session_id == session_id, QueryLogModel.user_id == user_id, QueryLogModel.is_summarized == False
         ).order_by(QueryLogModel.created_at.asc()).all()
 
     def update_session_summary(self, session_id: str, new_summary: str, summarized_log_ids: List[str]):
-        session = self.get_or_create_chat_session(session_id)
-        session.summary = new_summary
-        # Mark processed logs as summarized so they aren't processed again
-        self.db.query(QueryLogModel).filter(QueryLogModel.id.in_(summarized_log_ids)).update({"is_summarized": True})
+        session = self.db.query(ChatSessionModel).filter_by(id=session_id).first()
+        if session:
+            session.summary = new_summary
+            self.db.query(QueryLogModel).filter(QueryLogModel.id.in_(summarized_log_ids)).update({"is_summarized": True})
+            self.db.commit()
+
+    def delete_chat_session(self, session_id: str, user_id: str) -> bool:
+        session = self.db.query(ChatSessionModel).filter(ChatSessionModel.id == session_id, ChatSessionModel.user_id == user_id).first()
+        if session:
+            self.db.delete(session) # Cascades to query_logs because of ForeignKey config in DB
+            self.db.commit()
+            return True
+        return False
+
+    def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, session_id: str = None, status: str = "Success", user_id: str = None) -> QueryLogModel:
+        log = QueryLogModel(
+            query_text=query_text, response_snippet=response_snippet, latency_ms=latency_ms, 
+            source_count=source_count, session_id=session_id, status=status, user_id=user_id
+        )
+        self.db.add(log)
         self.db.commit()
-    # -----------------------------------
+        self.db.refresh(log)
+        return log
+
+    def get_query_logs(self, limit: int = 100, user_id: str = None) -> List[QueryLogModel]:
+        query = self.db.query(QueryLogModel)
+        if user_id:
+            query = query.filter(QueryLogModel.user_id == user_id)
+        return query.order_by(QueryLogModel.created_at.desc()).limit(limit).all()
+
+    def delete_user_query_logs(self, user_id: str) -> bool:
+        try:
+            self.db.query(ChatSessionModel).filter(ChatSessionModel.user_id == user_id).delete()
+            self.db.query(QueryLogModel).filter(QueryLogModel.user_id == user_id).delete()
+            self.db.commit()
+            return True
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def update_message_feedback(self, message_id: str, score: int, text: str, user_id: str) -> bool:
+        log = self.db.query(QueryLogModel).filter(QueryLogModel.id == message_id, QueryLogModel.user_id == user_id).first()
+        if log:
+            log.feedback_score = score
+            log.feedback_text = text
+            self.db.commit()
+            return True
+        return False
 
     def create_document(self, name: str, file_type: str, size_mb: float) -> DocumentModel:
         db_doc = DocumentModel(name=name, file_type=file_type, size_mb=size_mb)
@@ -105,41 +156,25 @@ class SQLRepository:
             return True
         return False
 
-    def create_query_log(self, query_text: str, response_snippet: str, latency_ms: int, source_count: int, session_id: str = None, status: str = "Success", user_id: str = None) -> QueryLogModel:
-        log = QueryLogModel(
-            query_text=query_text, response_snippet=response_snippet,
-            latency_ms=latency_ms, source_count=source_count, 
-            session_id=session_id, status=status, user_id=user_id
-        )
-        self.db.add(log)
+    def clear_document_data(self, document_id: str):
+        # Delete old chunks and edges before reindexing
+        self.db.query(DocumentChunkModel).filter(DocumentChunkModel.document_id == document_id).delete()
+        self.db.query(GraphEdgeModel).filter(GraphEdgeModel.document_id == document_id).delete()
         self.db.commit()
-        self.db.refresh(log)
-        return log
 
-    def get_query_logs(self, limit: int = 100, user_id: str = None) -> List[QueryLogModel]:
-        query = self.db.query(QueryLogModel)
-        if user_id:
-            query = query.filter(QueryLogModel.user_id == user_id)
-        return query.order_by(QueryLogModel.created_at.desc()).limit(limit).all()
-    
-    def delete_all_query_logs(self) -> bool:
-        try:
-            self.db.query(QueryLogModel).delete()
-            self.db.commit()
-            return True
-        except Exception as e:
-            self.db.rollback()
-            raise e
+    def get_document_chunks_count(self, document_id: str) -> int:
+        return self.db.query(DocumentChunkModel).filter(DocumentChunkModel.document_id == document_id).count()
+
+    def get_document_edges_count(self, document_id: str) -> int:
+        return self.db.query(GraphEdgeModel).filter(GraphEdgeModel.document_id == document_id).count()
 
     def upsert_graph_edges(self, document_id: str, triplets: List[Dict[str, str]]):
         db_edges = []
         for triplet in triplets:
             if "source" in triplet and "target" in triplet and "relation" in triplet:
                 edge = GraphEdgeModel(
-                    document_id=document_id,
-                    source_node=str(triplet["source"]),
-                    target_node=str(triplet["target"]),
-                    relation=str(triplet["relation"])
+                    document_id=document_id, source_node=str(triplet["source"]),
+                    target_node=str(triplet["target"]), relation=str(triplet["relation"])
                 )
                 db_edges.append(edge)
                 

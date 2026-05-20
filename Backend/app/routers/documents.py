@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, BackgroundTasks
 from typing import List
-from app.schemas import DocumentResponse
+from app.schemas import DocumentResponse, DocumentDetailResponse
 from app.services.rag_service import RAGService
 from app.dependencies import get_rag_service, get_sql_repo
 from app.repositories.sql_repo import SQLRepository
@@ -16,21 +16,10 @@ async def upload_documents(
     rag_svc: RAGService = Depends(get_rag_service)
 ):
     try:
-        # Save files and get back Database Models
         documents = await rag_svc.handle_uploads(files)
-        
-        # Process vector embeddings in the background
         background_tasks.add_task(rag_svc.process_documents, [doc.id for doc in documents])
-        
-        # FIX: Explicitly map DB Model fields to the Pydantic Schema
         return [
-            DocumentResponse(
-                id=d.id, 
-                name=d.name, 
-                type=d.file_type, 
-                size=f"{d.size_mb:.2f} MB", 
-                status=d.status
-            ) for d in documents
+            DocumentResponse(id=d.id, name=d.name, type=d.file_type, size=f"{d.size_mb:.2f} MB", status=d.status) for d in documents
         ]
     except Exception as e:
         logger.error(f"Upload failed: {str(e)}")
@@ -48,11 +37,43 @@ async def upload_folder(
 async def get_all_documents(sql_repo: SQLRepository = Depends(get_sql_repo)):
     docs = sql_repo.get_all_documents()
     return [
-        DocumentResponse(
-            id=d.id, name=d.name, type=d.file_type, 
-            size=f"{d.size_mb:.2f} MB", status=d.status
-        ) for d in docs
+        DocumentResponse(id=d.id, name=d.name, type=d.file_type, size=f"{d.size_mb:.2f} MB", status=d.status) for d in docs
     ]
+
+@router.get("/{document_id}", response_model=DocumentDetailResponse)
+async def get_document_details(
+    document_id: str,
+    sql_repo: SQLRepository = Depends(get_sql_repo)
+):
+    doc = sql_repo.get_document(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    chunk_count = sql_repo.get_document_chunks_count(document_id)
+    edge_count = sql_repo.get_document_edges_count(document_id)
+    
+    return DocumentDetailResponse(
+        id=doc.id, name=doc.name, type=doc.file_type, size=f"{doc.size_mb:.2f} MB", 
+        status=doc.status, chunk_count=chunk_count, graph_edge_count=edge_count
+    )
+
+@router.post("/{document_id}/reindex")
+async def reindex_document(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    sql_repo: SQLRepository = Depends(get_sql_repo),
+    rag_svc: RAGService = Depends(get_rag_service)
+):
+    doc = sql_repo.get_document(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    # Clear old data before re-processing
+    sql_repo.clear_document_data(document_id)
+    sql_repo.update_document_status(document_id, "Pending Reindex")
+    
+    background_tasks.add_task(rag_svc.process_documents, [document_id])
+    return {"status": "success", "message": "Document reindexing started in background."}
 
 @router.delete("/{document_id}")
 async def delete_document(
@@ -62,9 +83,7 @@ async def delete_document(
     try:
         success = rag_svc.delete_document(document_id)
         if not success:
-            # If it's already deleted (e.g. from a double click), just return success anyway (Idempotent)
             return {"status": "success", "message": "Document already deleted."}
-            
         return {"status": "success", "message": "Document deleted."}
     except Exception as e:
         logger.error(f"Failed to delete document {document_id}: {str(e)}")

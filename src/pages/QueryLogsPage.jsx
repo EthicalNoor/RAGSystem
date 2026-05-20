@@ -9,7 +9,8 @@ const {
     documents = [], 
     conversations = [], setConversations, 
     activeChatId, setActiveChatId,
-    fetchLogs, fetchMetrics 
+    fetchLogs, fetchMetrics,
+    fetchConversations 
   } = useApp();
 
   const [input, setInput] = useState('');
@@ -38,6 +39,11 @@ const {
     };
   }, []);
 
+  // Fetch chat sessions from database on component mount
+  useEffect(() => {
+    fetchConversations();
+  }, [fetchConversations]);
+
   const speakText = (text) => {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
@@ -47,20 +53,69 @@ const {
     window.speechSynthesis.speak(utterance);
   };
 
+  const handleSelectChat = async (chatId) => {
+    setActiveChatId(chatId);
+    setActiveMessageId(null);
+    
+    const chat = conversations.find(c => c.id === chatId);
+    
+    // If messages array is empty, fetch the history from the database
+    if (chat && (!chat.messages || chat.messages.length === 0)) {
+      try {
+        const history = await api.getChatSessionHistory(chatId);
+        
+        const loadedMessages = [];
+        history.forEach(log => {
+          // 1. Push user query as a separate message
+          loadedMessages.push({
+            id: `user-${log.id}`,
+            role: 'user',
+            content: log.query_text
+          });
+          // 2. Push AI response as a separate message
+          loadedMessages.push({
+            id: `ai-${log.id}`,
+            role: 'ai',
+            content: log.response_snippet,
+            latency: log.latency_ms,
+            citations: [] // Citations aren't stored in DB logs currently
+          });
+        });
+        
+        setConversations(prev => prev.map(c => 
+          c.id === chatId ? { ...c, messages: loadedMessages } : c
+        ));
+      } catch (error) {
+        console.error("Failed to load chat history:", error);
+      }
+    }
+  };
+
   const handleNewChat = () => {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setActiveChatId(null);
     setActiveMessageId(null);
   };
 
-  const handleDeleteChat = (e, id) => {
+  const handleDeleteChat = async (e, id) => {
     e.stopPropagation();
     if (window.confirm("Delete this conversation?")) {
-      setConversations(prev => prev.filter(c => c.id !== id));
-      if (activeChatId === id) {
-        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-        setActiveChatId(null);
-        setActiveMessageId(null);
+      try {
+        await api.authFetch(`/chat/sessions/${id}`, { method: 'DELETE' }); 
+        setConversations(prev => prev.filter(c => c.id !== id));
+        if (activeChatId === id) {
+          if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+          setActiveChatId(null);
+          setActiveMessageId(null);
+        }
+      } catch (error) {
+        // Fallback to local delete if API fails
+        setConversations(prev => prev.filter(c => c.id !== id));
+        if (activeChatId === id) {
+          if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+          setActiveChatId(null);
+          setActiveMessageId(null);
+        }
       }
     }
   };
@@ -135,7 +190,7 @@ const {
     }
   };
 
-  // --- NEW: Handle opening PDF with auto-navigation & highlighting ---
+  // --- Handle opening PDF with auto-navigation & highlighting ---
   const handleCitationClick = (cite) => {
     const backendUrl = import.meta.env.VITE_API_BASE_URL 
       ? import.meta.env.VITE_API_BASE_URL.replace('/api/v1', '') 
@@ -150,13 +205,8 @@ const {
       .trim()
       .substring(0, 40);
 
-    // OPTION 1.5 (Active): Native Chrome/Edge PDF Highlighting
-    // Uses native browser #page=X&search=Y fragment to jump & highlight in yellow
+    // Native Chrome/Edge PDF Highlighting
     const targetUrl = `${fileUrl}#page=${cite.page}&search=${encodeURIComponent(cleanSearchText)}`;
-
-    // OPTION 2 (Commented out): Custom PDF.js Viewer
-    // If you build a custom pdf.js wrapper in your public folder, uncomment this:
-    // const targetUrl = `/pdf-viewer?file=${encodeURIComponent(fileUrl)}&page=${cite.page}&text=${encodeURIComponent(cite.content)}`;
 
     window.open(targetUrl, '_blank');
   };
@@ -179,7 +229,7 @@ const {
               <div 
                 key={chat.id} 
                 className={`chat-history-item ${activeChatId === chat.id ? 'active' : ''}`}
-                onClick={() => { setActiveChatId(chat.id); setActiveMessageId(null); }}
+                onClick={() => handleSelectChat(chat.id)}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
                   <Icons.MessageSquare />
@@ -310,7 +360,7 @@ const {
                   <div key={cite.citation_idx} style={{ background: 'var(--bg-app)', border: '1px solid var(--border-medium)', borderRadius: '8px', padding: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                       
-                      {/* NEW: Clickable, interactive file name link */}
+                      {/* Clickable, interactive file name link */}
                       <span 
                         onClick={() => handleCitationClick(cite)}
                         style={{ 

@@ -49,7 +49,10 @@ export const api = {
   updateSettings: (data) => authFetch(`/system/settings`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
   chat: (query, session_id) => authFetch(`/chat`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ query, session_id }) }),
   getGraphData: () => authFetch(`/system/graphdb/data`),
-  getModels: () => authFetch(`/system/settings/models`)
+  getModels: () => authFetch(`/system/settings/models`),
+  // --- ADDED ---
+  getChatSessions: () => authFetch('/chat/sessions'),
+  getChatSessionHistory: (sessionId) => authFetch(`/chat/sessions/${sessionId}`),
 };
 
 export const Icons = {
@@ -91,6 +94,7 @@ export const AppProvider = ({ children }) => {
     try { 
       const userId = localStorage.getItem('user_id') || 'default';
       const parsed = JSON.parse(localStorage.getItem(`rag_conversations_${userId}`));
+      return Array.isArray(parsed) ? parsed : [];
     } catch { return []; }
   });
   const [activeChatId, setActiveChatId] = useState(null);
@@ -101,9 +105,25 @@ export const AppProvider = ({ children }) => {
   const fetchHealth = useCallback(() => api.getVDBHealth().then(setHealth).catch(console.error), []);
   const fetchSettings = useCallback(() => api.getSettings().then(setSettings).catch(console.error), []);
 
+  // --- ADDED: Fetch chat sessions from database ---
+  const fetchConversations = useCallback(async () => {
+    try {
+      const sessions = await api.getChatSessions();
+      
+      const formattedSessions = sessions.map(s => ({
+        id: s.id,
+        title: s.summary ? s.summary : 'New Chat', 
+        messages: [] // Load messages dynamically when clicked
+      }));
+      
+      setConversations(formattedSessions);
+    } catch (error) {
+      console.error("Failed to load chat sessions from DB:", error);
+    }
+  }, []);
+
   useEffect(() => {
     if (!hasInitialized.current) {
-      // Only fetch settings if Admin
       const role = localStorage.getItem('user_role');
       if (role === 'admin') fetchSettings();
       
@@ -112,7 +132,7 @@ export const AppProvider = ({ children }) => {
     }
   }, [fetchSettings, fetchDocuments]);
 
-useEffect(() => {
+  useEffect(() => {
     const userId = localStorage.getItem('user_id') || 'default';
     localStorage.setItem(`rag_conversations_${userId}`, JSON.stringify(conversations));
   }, [conversations]);
@@ -153,14 +173,16 @@ useEffect(() => {
     health, fetchHealth,
     settings, fetchSettings,
     conversations, setConversations,
-    activeChatId, setActiveChatId
+    activeChatId, setActiveChatId,
+    fetchConversations // --- ADDED ---
   }), [
     documents, fetchDocuments,
     metrics, fetchMetrics,
     logs, fetchLogs,
     health, fetchHealth,
     settings, fetchSettings,
-    conversations, activeChatId
+    conversations, activeChatId,
+    fetchConversations
   ]);
 
   return (

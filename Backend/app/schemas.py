@@ -2,6 +2,14 @@ from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    role: str
+    model_config = ConfigDict(from_attributes=True)
+
 class DocumentResponse(BaseModel):
     id: str
     name: str
@@ -10,9 +18,19 @@ class DocumentResponse(BaseModel):
     status: str
     model_config = ConfigDict(from_attributes=True)
 
+class DocumentDetailResponse(DocumentResponse):
+    chunk_count: int
+    graph_edge_count: int
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    summary: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
 class ChatRequest(BaseModel):
     query: str
-    session_id: Optional[str] = None  # <-- Tracks conversation threads
+    session_id: Optional[str] = None
 
 class Citation(BaseModel):
     citation_idx: int
@@ -39,7 +57,13 @@ class QueryLogResponse(BaseModel):
     source_count: int
     status: str
     created_at: datetime
+    feedback_score: Optional[int] = None
+    feedback_text: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
+class FeedbackRequest(BaseModel):
+    score: int
+    text: Optional[str] = None
 
 class DashboardMetricsResponse(BaseModel):
     total_documents: int

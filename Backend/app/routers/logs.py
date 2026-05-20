@@ -12,7 +12,7 @@ from datetime import datetime
 
 from google import genai
 from openai import OpenAI
-from app.security import MASK, decrypt_key # <-- IMPORT ADDED
+from app.security import MASK, decrypt_key
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -37,20 +37,9 @@ async def get_dashboard_metrics(
 @router.get("/logs/queries", response_model=List[QueryLogResponse])
 async def get_query_logs(
     sql_repo: SQLRepository = Depends(get_sql_repo),
-    user_id: str = Depends(get_current_user) # <-- Inject the user ID here
+    user_id: str = Depends(get_current_user) 
 ):
     return sql_repo.get_query_logs(limit=50, user_id=user_id)
-
-@router.delete("/logs/queries")
-async def clear_query_logs(sql_repo: SQLRepository = Depends(get_sql_repo)):
-    try:
-        success = sql_repo.delete_all_query_logs()
-        if success:
-            return {"status": "success", "message": "All query logs deleted"}
-        raise HTTPException(status_code=500, detail="Failed to delete logs")
-    except Exception as e:
-        logger.error(f"Error clearing logs: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error while clearing logs")
 
 @router.get("/vectordb/health", response_model=VectorDBHealthResponse)
 async def get_vectordb_health(vector_repo: VectorRepository = Depends(get_vector_repo)):
@@ -109,11 +98,10 @@ async def update_system_settings(payload: SettingsPayload, sql_repo: SQLReposito
     logger.info("Saving user settings directly to the database.")
     
     update_data = payload.dict(exclude_unset=True)
-    mask = "••••••••••••••••••••••••••••••••"
     
-    if update_data.get('openai_api_key') == mask or not update_data.get('openai_api_key'):
+    if update_data.get('openai_api_key') == MASK or not update_data.get('openai_api_key'):
         update_data.pop('openai_api_key', None)
-    if update_data.get('gemini_api_key') == mask or not update_data.get('gemini_api_key'):
+    if update_data.get('gemini_api_key') == MASK or not update_data.get('gemini_api_key'):
         update_data.pop('gemini_api_key', None)
         
     sql_repo.update_settings(update_data)
@@ -124,7 +112,6 @@ async def update_system_settings(payload: SettingsPayload, sql_repo: SQLReposito
 async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
     settings = sql_repo.get_settings()
     
-    # --- FIX: DECRYPT KEYS BEFORE API CALLS ---
     decrypted_openai = decrypt_key(settings.openai_api_key)
     decrypted_gemini = decrypt_key(settings.gemini_api_key)
     
@@ -133,7 +120,6 @@ async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
         "gemini": {"llm": [], "embedding": []}
     }
     
-    # Fetch OpenAI Models
     if decrypted_openai:
         try:
             client = OpenAI(api_key=decrypted_openai)
@@ -146,7 +132,6 @@ async def get_available_models(sql_repo: SQLRepository = Depends(get_sql_repo)):
         except Exception as e:
             logger.warning(f"Could not fetch OpenAI models (Key might be invalid): {e}")
 
-    # Fetch Gemini Models
     if decrypted_gemini:
         try:
             client = genai.Client(api_key=decrypted_gemini)

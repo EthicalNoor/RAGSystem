@@ -1,84 +1,60 @@
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 
 from app.config import get_logger, get_config
-from app.routers import chat, documents, logs, auth
-from app.database import engine, Base
+from app.routers import chat, documents, logs, auth, users
+from migrate import run_migrations
 
 logger = get_logger(__name__)
 config = get_config()
 
 os.makedirs(config.upload_dir, exist_ok=True)
 
-try:
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        
-        try:
-            conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS database_url VARCHAR"))
-        except Exception: pass
+# ==========================================
+# DYNAMIC MIGRATION LOGIC
+# ==========================================
+DB_STATE_FILE = ".last_migrated_db"
 
-        try:
-            conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page_number INTEGER"))
-        except Exception: pass
+def check_and_run_migrations():
+    current_db_url = config.database_url
+    if not current_db_url:
+        logger.warning("No database_url found in environment/settings. Skipping migrations.")
+        return
 
-        try:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS chat_sessions (
-                    id VARCHAR PRIMARY KEY,
-                    summary TEXT DEFAULT '',
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
-            conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN DEFAULT FALSE"))
-        except Exception: pass
+    last_db_url = None
+    if os.path.exists(DB_STATE_FILE):
+        with open(DB_STATE_FILE, "r") as f:
+            last_db_url = f.read().strip()
 
+    if current_db_url != last_db_url or True: 
+        logger.info("Forcing migration to apply new database columns...")
         try:
-            logger.info("Running User & Auth Migrations...")
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id VARCHAR PRIMARY KEY,
-                    email VARCHAR UNIQUE,
-                    name VARCHAR,
-                    picture VARCHAR,
-                    role VARCHAR DEFAULT 'user',
-                    password VARCHAR,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            # Ensure new columns exist for older DBs
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR DEFAULT 'user'"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password VARCHAR"))
-
-            conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS user_id VARCHAR REFERENCES users(id) ON DELETE CASCADE"))
-            conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS user_id VARCHAR REFERENCES users(id) ON DELETE CASCADE"))
-            
-            # --- SEED DEFAULT ADMIN USER ---
-            conn.execute(text("""
-                INSERT INTO users (id, email, name, role, password) 
-                VALUES ('admin_sys_001', 'admin', 'System Administrator', 'admin', 'admin123')
-                ON CONFLICT (email) DO NOTHING
-            """))
-            
+            success = run_migrations(current_db_url)
+            if success:
+                with open(DB_STATE_FILE, "w") as f:
+                    f.write(current_db_url)
         except Exception as e:
-            logger.warning(f"Auth migration skipped or failed: {e}")
-            
-        conn.commit()
-        
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables and pgvector extension initialized.")
-except Exception as e:
-    logger.error(f"Database initialization failed: {e}")
+            logger.error(f"Failed to run migrations: {e}")
+    else:
+        logger.info("Database credentials unchanged. Skipping schema migrations.")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    check_and_run_migrations()
+    yield
+
+# ==========================================
+# FASTAPI APP INITIALIZATION
+# ==========================================
 app = FastAPI(
     title="RAG Control Center API",
     description="Production-grade FastAPI backend with pgvector",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan 
 )
 
 app.mount("/uploads", StaticFiles(directory=config.upload_dir), name="uploads")
@@ -103,6 +79,7 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 app.include_router(logs.router, prefix="/api/v1/system", tags=["System & Logs"])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
+app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 
 @app.get("/health", tags=["Health"])
 async def health_check():

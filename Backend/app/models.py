@@ -89,4 +89,6 @@ class QueryLogModel(Base):
     source_count = Column(Integer, default=0)
     status = Column(String, default="Success")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True) # <-- NEW
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    feedback_score = Column(Integer, nullable=True) # e.g., 1 for thumbs up, -1 for down
+    feedback_text = Column(String, nullable=True)
